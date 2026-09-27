@@ -13,9 +13,29 @@ from pathlib import Path
 from typing import Optional
 
 from src.logging_config import get_logger
+from src.log_retention import (
+    _process_open_file_ids,
+    has_reparse_ancestor,
+    is_file_open,
+    is_reparse_point,
+)
+from src.portable.app_paths import get_portable_runtime_paths
 
 # 获取logger
 logger = get_logger(__name__, service="system")
+
+
+def _default_log_path(value, legacy_default: str, *portable_parts: str):
+    """Resolve untouched legacy defaults to the portable data root.
+
+    Explicit strings and ``Path`` values retain the caller's existing behavior,
+    including non-string ``os.PathLike`` inputs accepted by the old API.
+    """
+
+    paths = get_portable_runtime_paths()
+    if paths is not None and value == legacy_default:
+        return paths.data_path(*portable_parts)
+    return value
 
 
 def export_logs_package(
@@ -37,6 +57,9 @@ def export_logs_package(
         生成的ZIP文件路径，失败返回None
     """
     try:
+        output_dir = _default_log_path(output_dir, "logs/exports", "logs", "exports")
+        log_dir = _default_log_path(log_dir, "logs", "logs")
+
         # 创建导出目录
         os.makedirs(output_dir, exist_ok=True)
         
@@ -106,21 +129,61 @@ def cleanup_old_exports(export_dir: str = "logs/exports", keep_count: int = 5) -
         删除的文件数量
     """
     try:
+        export_dir = _default_log_path(export_dir, "logs/exports", "logs", "exports")
         export_path = Path(export_dir)
-        if not export_path.exists():
+        try:
+            export_path.lstat()
+        except FileNotFoundError:
+            return 0
+        except OSError as e:
+            logger.error(
+                f"无法检查导出目录，未执行清理: {e}",
+                extra={"event": "export_cleanup_inspect_error"},
+            )
+            return 0
+        if has_reparse_ancestor(export_path):
             return 0
         
-        # 获取所有ZIP文件，按修改时间排序
-        zip_files = sorted(
-            export_path.glob("logs_export_*.zip"),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
-        )
-        
-        # 删除多余的文件
-        deleted = 0
-        for old_file in zip_files[keep_count:]:
+        # The published policy caps exports at five packages and seven days.
+        keep_count = min(max(int(keep_count), 0), 5)
+        cutoff_time = datetime.now().timestamp() - timedelta(days=7).total_seconds()
+        open_file_ids = _process_open_file_ids()
+        zip_files = []
+        try:
+            with os.scandir(export_path) as entries:
+                candidate_names = [
+                    entry.name
+                    for entry in entries
+                    if entry.name.startswith("logs_export_") and entry.name.endswith(".zip")
+                ]
+        except OSError as e:
+            logger.error(
+                f"无法枚举导出目录，未执行清理: {e}",
+                extra={"event": "export_cleanup_enumerate_error"},
+            )
+            return 0
+        for candidate_name in candidate_names:
+            candidate = export_path / candidate_name
             try:
+                if is_reparse_point(candidate) or not candidate.is_file():
+                    continue
+                modified = candidate.stat().st_mtime
+                zip_files.append((candidate, modified))
+            except OSError as e:
+                logger.warning(
+                    f"无法检查导出文件，保留: {candidate.name}: {e}",
+                    extra={"event": "export_cleanup_inspect_error"},
+                )
+        zip_files.sort(key=lambda item: item[1], reverse=True)
+        
+        # Age expiration applies even to one of the five newest files.
+        deleted = 0
+        for index, (old_file, modified) in enumerate(zip_files):
+            if modified >= cutoff_time and index < keep_count:
+                continue
+            try:
+                if is_file_open(old_file, opened_file_ids=open_file_ids):
+                    continue
                 old_file.unlink()
                 deleted += 1
                 logger.info(f"已删除旧导出文件: {old_file.name}", extra={"event": "export_cleanup"})

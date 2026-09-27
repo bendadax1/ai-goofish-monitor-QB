@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import os
 import sys
@@ -12,9 +12,15 @@ from openai import APITimeoutError, AsyncOpenAI
 from src import config
 from src.logging_config import get_logger
 from src.config import STORAGE_BACKEND
+from src.portable.app_paths import get_portable_runtime_paths
 
 # 权重框架指导文件路径（策略资产，不作为硬编码权重依赖）
-WEIGHT_GUIDE_PATH = Path("prompts/guide/weight_framework_guide.md")
+_portable_runtime_paths = get_portable_runtime_paths()
+WEIGHT_GUIDE_PATH = (
+    _portable_runtime_paths.program_path("prompts", "guide", "weight_framework_guide.md")
+    if _portable_runtime_paths is not None
+    else Path("prompts/guide/weight_framework_guide.md")
+)
 
 # 统一日志输出
 logger = get_logger(__name__, service="system")

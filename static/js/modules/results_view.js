@@ -1,4 +1,4 @@
-﻿﻿// 结果视图
+// 结果视图
 async function fetchAndRenderResults(options = {}) {
     const { silent = false, force = false } = options;
     const scrollContainer = document.querySelector('main');

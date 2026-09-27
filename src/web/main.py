@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.base import STATE_PAUSED
 
 from src.version import VERSION
 from src.web.auth import (
@@ -31,13 +32,15 @@ from src.web.account_manager import router as account_router
 from src.web.bayes_api import router as bayes_router
 from src.web.user_manager import router as user_router, groups_router
 from src.web.auth import is_multi_user_mode
+from src.portable.launcher_pairing import router as launcher_pairing_router
 from src.logging_config import setup_logging, get_logger
 from src.storage import get_storage
 from src.storage.utils import verify_password
+from src.portable.app_paths import get_portable_runtime_paths
 from src.config import (
     LOG_LEVEL, LOG_CONSOLE_LEVEL, LOG_DIR, LOG_MAX_BYTES,
     LOG_BACKUP_COUNT, LOG_RETENTION_DAYS, LOG_JSON_FORMAT, LOG_ENABLE_LEGACY,
-    DATABASE_URL, SCHEDULER_LOGIN_REQUIRED_IN_MULTI_USER, WEB_USERNAME
+    DATABASE_URL, PORTABLE_MODE, SCHEDULER_LOGIN_REQUIRED_IN_MULTI_USER, WEB_USERNAME
 )
 
 # 初始化日志系统
@@ -71,6 +74,10 @@ def _defer_scheduler_start_until_login() -> bool:
 async def _ensure_scheduler_started(reason: str, username: str = "") -> None:
     """确保调度器已启动，避免重复启动并记录原因。"""
     async with scheduler_start_lock:
+        if PORTABLE_MODE:
+            from src.portable.web_runtime import portable_scheduler_start_allowed
+            if not portable_scheduler_start_allowed():
+                return
         if scheduler.running:
             return
         await reload_scheduler_jobs(scheduler, fetcher_processes, update_task_running_status)
@@ -81,9 +88,97 @@ async def _ensure_scheduler_started(reason: str, username: str = "") -> None:
         )
 
 
+async def portable_runtime_startup() -> None:
+    """Run only portable-safe scheduler startup, never legacy migration/reset."""
+
+    if not PORTABLE_MODE:
+        raise RuntimeError("portable runtime startup was requested outside portable mode")
+    from src.portable.web_runtime import portable_scheduler_start_allowed, portable_web_runtime_active
+    if not portable_web_runtime_active():
+        raise RuntimeError("便携版业务 Web 必须通过 portable_web.py 启动")
+    if not portable_scheduler_start_allowed():
+        logger.info(
+            "便携版首次管理员尚未完成，跳过调度器启动",
+            extra={"event": "portable_scheduler_blocked_by_setup"},
+        )
+        return
+    if _defer_scheduler_start_until_login():
+        logger.info(
+            "便携版等待用户登录后启动调度器",
+            extra={"event": "portable_scheduler_deferred_until_login"},
+        )
+        return
+    await _ensure_scheduler_started(reason="portable_normal_startup")
+
+
+async def portable_runtime_shutdown() -> None:
+    """Stop scheduler admission only; later Launcher work owns worker drain."""
+
+    if scheduler.running:
+        logger.info("正在关闭便携版调度器...", extra={"event": "portable_scheduler_shutdown"})
+        scheduler.shutdown()
+
+
+async def portable_runtime_pause_scheduler() -> bool:
+    """Pause new portable scheduler dispatch without deleting any jobs."""
+
+    if not scheduler.running:
+        return False
+    if scheduler.state == STATE_PAUSED:
+        return False
+    scheduler.pause()
+    logger.info("便携版调度器已暂停排空", extra={"event": "portable_scheduler_paused_for_drain"})
+    return True
+
+
+async def portable_runtime_resume_scheduler(was_running: bool) -> None:
+    """Restore a scheduler paused by a timed-out/cancelled portable drain."""
+
+    if was_running and scheduler.running:
+        scheduler.resume()
+        logger.info("便携版调度器已恢复", extra={"event": "portable_scheduler_resumed_after_drain"})
+
+
+def portable_runtime_managed_processes_active() -> bool:
+    """Observe existing workers and cleanup coroutines; never terminate them."""
+
+    active_fetchers = any(
+        getattr(process, "returncode", None) is None
+        for process in fetcher_processes.values()
+    )
+    login_active = login_process is not None and getattr(login_process, "returncode", None) is None
+    from src.portable.web_runtime import portable_background_tasks_active
+    return active_fetchers or login_active or portable_background_tasks_active()
+
+
+def portable_runtime_dispose_storage_engine() -> None:
+    """Close an already-created storage engine without causing initialization."""
+
+    try:
+        import src.storage as storage_module
+        storage = getattr(storage_module, "_storage_instance", None)
+        engine = getattr(storage, "engine", None)
+        if engine is not None:
+            engine.dispose()
+    except Exception:
+        logger.error("便携版存储连接池关闭失败", extra={"event": "portable_storage_dispose_failed"})
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """管理应用的生命周期事件。"""
+    if PORTABLE_MODE:
+        # Normal portable hosting must install its outer readiness/setup gate
+        # before this business application can start.  The legacy entry points
+        # cannot acquire this state by importing the module.
+        await portable_runtime_startup()
+        yield
+        await portable_runtime_shutdown()
+        # Do not reuse legacy task reset/terminate behavior here.  Portable
+        # controlled shutdown is completed by the Launcher in a later phase.
+        return
+
     # 启动时迁移旧版 ntfy 配置（NTFY_TOPIC_URL -> 新字段），保证升级不中断
     try:
         from src.notifier.config import migrate_legacy_ntfy_config
@@ -124,12 +219,18 @@ async def stop_task_process(task_id: int):
 app = FastAPI(title="咸鱼公开内容查看智能处理程序", lifespan=lifespan)
 
 # 挂载静态文件（无需认证，因为登录页面和主页都需要访问）
-app.mount("/static", StaticFiles(directory="static"), name="static")
-# 挂载图片静态文件（无需认证，因为登录页面需要访问）
-app.mount("/images", StaticFiles(directory="images"), name="images")
-
-# 配置模板
-templates = Jinja2Templates(directory="templates")
+_portable_paths = get_portable_runtime_paths()
+if _portable_paths is not None:
+    # More specific avatar mount must precede /static. Business uploads are not
+    # part of the immutable application component; images only exposes branding.
+    app.mount("/static/avatars", StaticFiles(directory=str(_portable_paths.data_path("assets", "avatars"))), name="avatars")
+    app.mount("/static", StaticFiles(directory=str(_portable_paths.program_path("static"))), name="static")
+    app.mount("/images", StaticFiles(directory=str(_portable_paths.program_path("images"))), name="images")
+    templates = Jinja2Templates(directory=str(_portable_paths.program_path("templates")))
+else:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    app.mount("/images", StaticFiles(directory="images"), name="images")
+    templates = Jinja2Templates(directory="templates")
 
 
 # ============== 认证中间件 ==============
@@ -260,7 +361,9 @@ async def do_login(
         # 登录成功，设置Cookie并重定向
         response = RedirectResponse(url="/", status_code=302)
         set_session_cookie(response, user)
-        if _defer_scheduler_start_until_login():
+        if _defer_scheduler_start_until_login() and (
+            not PORTABLE_MODE or _portable_scheduler_login_is_allowed()
+        ):
             try:
                 await _ensure_scheduler_started(reason="login", username=username)
             except Exception as e:
@@ -280,6 +383,15 @@ async def do_login(
         )
 
 
+def _portable_scheduler_login_is_allowed() -> bool:
+    """Avoid scheduling before the portable first-admin transaction completes."""
+
+    if not PORTABLE_MODE:
+        return True
+    from src.portable.web_runtime import portable_scheduler_start_allowed
+    return portable_scheduler_start_allowed()
+
+
 @app.get("/logout")
 async def logout(request: Request):
     """登出，清除Cookie"""
@@ -287,7 +399,7 @@ async def logout(request: Request):
     username = user.get("username", "unknown") if user else "unknown"
     
     response = RedirectResponse(url="/login", status_code=302)
-    clear_session_cookie(response)
+    clear_session_cookie(response, request)
     logger.info(f"用户 {username} 已登出", extra={"event": "user_logout", "username": username})
     return response
 
@@ -346,6 +458,11 @@ async def auth_middleware(request: Request, call_next):
     
     # 不需要认证的路径
     public_paths = ["/login", "/logout", "/health", "/favicon.ico", "/images/", "/static/"]
+
+    # Launcher routes implement their own narrow scoped-token or explicit
+    # browser-cookie authorization. Do not require a Web cookie for its bearer.
+    if path.startswith("/api/launcher/"):
+        return await call_next(request)
     
     if any(path.startswith(p) for p in public_paths):
         return await call_next(request)
@@ -383,9 +500,12 @@ app.include_router(account_router)
 app.include_router(bayes_router)
 app.include_router(user_router)
 app.include_router(groups_router)
+app.include_router(launcher_pairing_router)
 
 
 if __name__ == "__main__":
+    if PORTABLE_MODE:
+        raise RuntimeError("便携版业务 Web 必须通过 portable_web.py 启动")
     from src.config import SERVER_PORT
     server_port = SERVER_PORT()
     env = os.environ.copy()

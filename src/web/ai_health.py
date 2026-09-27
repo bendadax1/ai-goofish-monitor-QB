@@ -1,11 +1,19 @@
 import asyncio
 import copy
+import hmac
+import ipaddress
+import json
+import secrets
+import socket
 import time
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 import httpx
+import httpcore
 from openai import AsyncOpenAI, OpenAI
 
 import src.config
@@ -24,6 +32,19 @@ _VISION_TEST_IMAGE_DATA_URL = (
 
 _AI_HEALTH_CACHE: Dict[str, Dict[str, Any]] = {}
 _AI_HEALTH_CACHE_LOCK = Lock()
+_AI_HEALTH_CACHE_TTL_SECONDS = 5 * 60
+_AI_MANUAL_TEST_RESULTS: Dict[str, Dict[str, Any]] = {}
+_AI_MANUAL_TEST_INFLIGHT: Dict[str, asyncio.Task] = {}
+_AI_MANUAL_TEST_FINGERPRINTS: Dict[str, str] = {}
+_AI_MANUAL_TEST_CALLS: Dict[str, deque] = {}
+_AI_MANUAL_TEST_LOCK = Lock()
+_AI_MANUAL_TEST_RESULT_LIMIT = 256
+_AI_MANUAL_TEST_TIMEOUT_SECONDS = 8.0
+_AI_MANUAL_TEST_DNS_TIMEOUT_SECONDS = 2.0
+_AI_MANUAL_TEST_MAX_RESPONSE_BYTES = 64 * 1024
+_AI_MANUAL_TEST_PROMPT = "Reply with OK."
+_CONFIG_SNAPSHOT_UNSET = object()
+_AI_MANUAL_TEST_FINGERPRINT_KEY = secrets.token_bytes(32)
 
 
 def _now_text() -> str:
@@ -102,7 +123,12 @@ def _build_vision_result(
     }
 
 
-def _resolve_effective_ai_config(user: Optional[dict], overrides: Optional[dict] = None) -> Dict[str, Any]:
+def _resolve_effective_ai_config(
+    user: Optional[dict],
+    overrides: Optional[dict] = None,
+    *,
+    persisted_config: Any = _CONFIG_SNAPSHOT_UNSET,
+) -> Dict[str, Any]:
     """按运行模式解析当前应生效的 AI 配置。"""
     payload = overrides if isinstance(overrides, dict) else {}
     backend = (STORAGE_BACKEND() or "local").lower()
@@ -110,9 +136,16 @@ def _resolve_effective_ai_config(user: Optional[dict], overrides: Optional[dict]
     if backend == "postgres":
         user_id = _resolve_user_id(user)
         user_api_config: Dict[str, Any] = {}
-        if user_id:
+        if persisted_config is not _CONFIG_SNAPSHOT_UNSET:
+            user_api_config = persisted_config if isinstance(persisted_config, dict) else {}
+        elif user_id:
             try:
-                user_api_config = get_storage().get_default_api_config(user_id) or {}
+                storage = get_storage()
+                revision_reader = getattr(storage, "get_default_api_config_with_revision", None)
+                if callable(revision_reader):
+                    user_api_config = revision_reader(user_id) or {}
+                else:
+                    user_api_config = storage.get_default_api_config(user_id) or {}
             except Exception as exc:
                 logger.warning(
                     "读取用户AI配置失败",
@@ -148,6 +181,8 @@ def _resolve_effective_ai_config(user: Optional[dict], overrides: Optional[dict]
             "source": "postgres_user_config",
             "source_label": "当前用户配置（PostgreSQL）",
             "owner_id": user_id,
+            "config_id": str(user_api_config.get("id") or ""),
+            "config_revision": _resolve_nonnegative_int(user_api_config.get("config_revision"), 0),
             "api_key": api_key,
             "api_key_set": bool(api_key),
             "base_url": base_url,
@@ -471,10 +506,62 @@ def _default_health_snapshot(config: Dict[str, Any], config_state: Dict[str, Any
     }
 
 
-def _set_cached_snapshot(user: Optional[dict], snapshot: Dict[str, Any]) -> None:
-    """写入缓存，避免设置页频繁触发真实探测。"""
+def _resolve_nonnegative_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _utc_text(value: Optional[datetime] = None) -> str:
+    return (value or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _cache_identity(config: Dict[str, Any]) -> tuple[str, int]:
+    return (
+        str(config.get("config_id") or ""),
+        _resolve_nonnegative_int(config.get("config_revision"), 0),
+    )
+
+
+def _current_postgres_ai_config(user: Optional[dict]) -> Optional[Dict[str, Any]]:
+    """Read the current user's persisted API config and revision without network access."""
+    user_id = _resolve_user_id(user)
+    if not user_id:
+        return None
+    storage = get_storage()
+    reader = getattr(storage, "get_default_api_config_with_revision", None)
+    if not callable(reader):
+        raise RuntimeError("API config revision reader is unavailable")
+    return reader(user_id) or None
+
+
+def _set_cached_snapshot(
+    user: Optional[dict],
+    snapshot: Dict[str, Any],
+    *,
+    config_identity: Optional[tuple[str, int]] = None,
+) -> None:
+    """Write a TTL-bound cache entry only when its config identity was verified."""
+    if (STORAGE_BACKEND() or "local").lower() != "postgres":
+        with _AI_HEALTH_CACHE_LOCK:
+            _AI_HEALTH_CACHE[_cache_key(user)] = copy.deepcopy(snapshot)
+        return
+    if not config_identity or not config_identity[0]:
+        return
+    observed_at = datetime.now(timezone.utc)
+    entry = {
+        "_launcher_cache": True,
+        "config_id": config_identity[0],
+        "config_revision": config_identity[1],
+        "observed_at": _utc_text(observed_at),
+        "expires_at": _utc_text(observed_at + timedelta(seconds=_AI_HEALTH_CACHE_TTL_SECONDS)),
+        "observed_monotonic": time.monotonic(),
+        "snapshot": copy.deepcopy(snapshot),
+    }
     with _AI_HEALTH_CACHE_LOCK:
-        _AI_HEALTH_CACHE[_cache_key(user)] = copy.deepcopy(snapshot)
+        _AI_HEALTH_CACHE[_cache_key(user)] = entry
 
 
 def invalidate_ai_health_snapshot(user: Optional[dict]) -> None:
@@ -492,6 +579,19 @@ def get_ai_health_snapshot(user: Optional[dict]) -> Dict[str, Any]:
         cached = copy.deepcopy(_AI_HEALTH_CACHE.get(_cache_key(user)))
 
     if not cached:
+        return _default_health_snapshot(config, config_state)
+
+    if cached.get("_launcher_cache"):
+        current_identity = _cache_identity(config)
+        if (
+            cached.get("config_id") != current_identity[0]
+            or cached.get("config_revision") != current_identity[1]
+            or time.monotonic() - float(cached.get("observed_monotonic") or 0) >= _AI_HEALTH_CACHE_TTL_SECONDS
+        ):
+            return _default_health_snapshot(config, config_state)
+        cached = copy.deepcopy(cached.get("snapshot") or {})
+    elif config.get("backend") == "postgres":
+        # Older unbound snapshots cannot safely be shown as current after upgrade.
         return _default_health_snapshot(config, config_state)
 
     # 每次读取都覆盖来源与配置完整性，避免配置变更后缓存误导。
@@ -526,8 +626,9 @@ async def run_ai_health_check(
     snapshot = _default_health_snapshot(config, config_state)
 
     if not config_state.get("ready"):
-        _set_cached_snapshot(user, snapshot)
         return snapshot
+
+    start_identity = _cache_identity(config)
 
     web_result = _build_probe_result(success=None, level="unknown", message="本次未执行。")
     backend_result = _build_probe_result(success=None, level="unknown", message="本次未执行。")
@@ -581,5 +682,417 @@ async def run_ai_health_check(
         "overall_message": overall["message"],
         "checked_at": checked_at,
     }
-    _set_cached_snapshot(user, snapshot)
+    if config.get("backend") != "postgres":
+        _set_cached_snapshot(user, snapshot)
+    elif start_identity[0] and overrides is None:
+        try:
+            latest_config = _current_postgres_ai_config(user)
+            if latest_config is not None:
+                latest_identity = (
+                    str(latest_config.get("id") or ""),
+                    _resolve_nonnegative_int(latest_config.get("config_revision"), 0),
+                )
+                if latest_identity == start_identity:
+                    _set_cached_snapshot(user, snapshot, config_identity=start_identity)
+        except Exception as exc:
+            logger.warning(
+                "AI 健康快照配置版本复核失败，未缓存",
+                extra={"event": "ai_health_cache_identity_check_failed", "error_type": type(exc).__name__},
+            )
     return snapshot
+
+
+def _launcher_health_category(snapshot: Dict[str, Any]) -> str:
+    if snapshot.get("overall_level") == "ok":
+        return "healthy"
+    if snapshot.get("overall_level") == "warning":
+        return "partial"
+
+    messages = []
+    for name in ("web_test", "backend_test"):
+        result = snapshot.get(name)
+        if isinstance(result, dict) and result.get("success") is False:
+            messages.append(str(result.get("message") or "").lower())
+    message = " ".join(messages)
+    if any(marker in message for marker in ("timeout", "timed out", "超时")):
+        return "timeout"
+    if any(marker in message for marker in ("401", "403", "unauthorized", "forbidden", "认证失败")):
+        return "auth_failed"
+    if any(marker in message for marker in ("429", "rate limit", "too many requests", "限流")):
+        return "rate_limited"
+    if messages:
+        return "unavailable"
+    return "unknown"
+
+
+def get_portable_launcher_ai_health(user: Optional[dict]) -> Dict[str, Any]:
+    """Return a redacted current-user health-cache view; never perform a probe."""
+    if (STORAGE_BACKEND() or "local").lower() != "postgres":
+        raise RuntimeError("portable launcher AI health requires PostgreSQL")
+    current = _current_postgres_ai_config(user)
+    config_id = str((current or {}).get("id") or "")
+    config_revision = _resolve_nonnegative_int((current or {}).get("config_revision"), 0)
+    required_configured = bool(
+        current
+        and str(current.get("api_key") or "").strip()
+        and str(current.get("api_base_url") or "").strip()
+        and str(current.get("model") or "").strip()
+        and not current.get("api_key_invalid")
+    )
+
+    response = {
+        "status": "never_checked",
+        "observed_at": None,
+        "expires_at": None,
+        "config_id": config_id,
+        "config_revision": config_revision,
+        "source": "postgres_user_config",
+        "category": "unknown",
+        "latency_ms": None,
+    }
+    if not required_configured:
+        response["status"] = "unconfigured"
+        response["category"] = "unconfigured"
+        return response
+
+    with _AI_HEALTH_CACHE_LOCK:
+        cached = copy.deepcopy(_AI_HEALTH_CACHE.get(_cache_key(user)))
+    if not cached:
+        return response
+    if not cached.get("_launcher_cache"):
+        # An old cache entry has no config identity or verified timestamp.
+        response["status"] = "config_changed"
+        return response
+
+    response["observed_at"] = cached.get("observed_at")
+    response["expires_at"] = cached.get("expires_at")
+    cache_identity = (str(cached.get("config_id") or ""), _resolve_nonnegative_int(cached.get("config_revision"), -1))
+    if cache_identity != (config_id, config_revision):
+        response["status"] = "config_changed"
+        return response
+
+    snapshot = cached.get("snapshot") if isinstance(cached.get("snapshot"), dict) else {}
+    response["category"] = _launcher_health_category(snapshot)
+    latencies = []
+    for name in ("web_test", "backend_test"):
+        result = snapshot.get(name)
+        if isinstance(result, dict) and isinstance(result.get("latency_ms"), int) and not isinstance(result.get("latency_ms"), bool):
+            latencies.append(max(0, result["latency_ms"]))
+    response["latency_ms"] = max(latencies) if latencies else None
+    age = time.monotonic() - float(cached.get("observed_monotonic") or 0)
+    response["status"] = "stale" if age >= _AI_HEALTH_CACHE_TTL_SECONDS else "current"
+    return response
+
+
+class _PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Dial only the validated IP while HTTP Host and TLS SNI retain the URL host."""
+
+    def __init__(self, address: str):
+        self._address = address
+        self._backend = httpcore.AnyIOBackend()
+
+    async def connect_tcp(self, host: str, port: int, timeout: float | None = None, local_address: str | None = None, socket_options=None):
+        return await self._backend.connect_tcp(
+            self._address, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+        )
+
+    async def connect_unix_socket(self, path: str, timeout: float | None = None):
+        return await self._backend.connect_unix_socket(path, timeout=timeout)
+
+    async def sleep(self, seconds: float):
+        await self._backend.sleep(seconds)
+
+
+def _validate_manual_test_url(value: str) -> tuple[str, str]:
+    """Reject URL forms and resolved addresses that could redirect a test into a private network."""
+    try:
+        value = str(value or "").strip()
+        if len(value) > 2048 or any(ord(char) < 32 for char in value):
+            raise ValueError("unsupported_url")
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+            raise ValueError("unsupported_url")
+        if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+            raise ValueError("unsupported_url")
+        host = parsed.hostname.rstrip(".").lower()
+        if parsed.port is not None and not (1 <= parsed.port <= 65535):
+            raise ValueError("unsupported_url")
+        if parsed.scheme != "https":
+            raise ValueError("unsupported_url")
+
+        try:
+            addresses = [ipaddress.ip_address(host)]
+        except ValueError:
+            if host.endswith((".localhost", ".local", ".internal", ".test")):
+                raise ValueError("unsafe_address")
+            else:
+                try:
+                    addresses = [
+                        ipaddress.ip_address(item[4][0])
+                        for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+                    ]
+                except (OSError, ValueError):
+                    raise ValueError("unsafe_address") from None
+        if not addresses:
+            raise ValueError("unsafe_address")
+        if any(
+            not address.is_global or address.is_private or address.is_loopback or address.is_link_local
+            or address.is_multicast or address.is_reserved or address.is_unspecified
+            for address in addresses
+        ):
+            raise ValueError("unsafe_address")
+        return value.strip().rstrip("/") + "/chat/completions", str(addresses[0])
+    except (ValueError, UnicodeError):
+        raise ValueError("unsafe_url") from None
+
+
+def _manual_test_result(status: str, message: str, latency_ms: Optional[int] = None) -> Dict[str, Any]:
+    return {"status": status, "message": message, "latency_ms": latency_ms, "checked_at": _now_text()}
+
+
+def _manual_test_fingerprint(
+    *,
+    backend: str,
+    settings: Optional[dict],
+    saved_config_snapshot: Any,
+) -> str:
+    """Bind an idempotency key to the confirmed target without retaining overrides."""
+    overrides = settings if isinstance(settings, dict) else {}
+    canonical_overrides = {}
+    for name, value in overrides.items():
+        if not isinstance(name, str):
+            raise ValueError("invalid_manual_test_settings")
+        # Keep presence, JSON type and exact string content. Resolution can apply
+        # truthiness before trimming, so folding whitespace/empty/null into absence
+        # could bind different provider targets or credentials to one request ID.
+        canonical_overrides[name] = {
+            "present": True,
+            "type": type(value).__name__,
+            "value": value,
+        }
+
+    if isinstance(saved_config_snapshot, dict):
+        config_id = str(saved_config_snapshot.get("id") or "")
+        config_revision = _resolve_nonnegative_int(saved_config_snapshot.get("config_revision"), 0)
+    else:
+        config_id = ""
+        config_revision = 0
+    payload = json.dumps(
+        {
+            "backend": backend,
+            "config_id": config_id,
+            "config_revision": config_revision,
+            "overrides": canonical_overrides,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hmac.new(_AI_MANUAL_TEST_FINGERPRINT_KEY, payload, "sha256").hexdigest()
+
+
+async def _send_manual_ai_test(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Send one fixed, bounded, non-sensitive chat completion request without SDK retries."""
+    started = time.perf_counter()
+    try:
+        endpoint, pinned_address = await asyncio.wait_for(
+            asyncio.to_thread(_validate_manual_test_url, str(config.get("base_url") or "")),
+            timeout=_AI_MANUAL_TEST_DNS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return _manual_test_result("rejected", "目标地址解析超时，已阻止请求。", int((time.perf_counter() - started) * 1000))
+    except ValueError:
+        return _manual_test_result("rejected", "目标 URL 不符合安全策略。", int((time.perf_counter() - started) * 1000))
+    if not config.get("api_key") or not config.get("model_name"):
+        return _manual_test_result("rejected", "AI 配置不完整。")
+    if len(str(config.get("api_key"))) > 4096 or len(str(config.get("model_name"))) > 200:
+        return _manual_test_result("rejected", "AI 配置字段超出长度限制。")
+
+    timeout = httpx.Timeout(_AI_MANUAL_TEST_TIMEOUT_SECONDS)
+    try:
+        async def request_once():
+            transport = httpx.AsyncHTTPTransport(retries=0)
+            # HTTPX keeps the URL hostname for Host/SNI; pin only the TCP dial.
+            transport._pool._network_backend = _PinnedNetworkBackend(pinned_address)
+            async with httpx.AsyncClient(
+                timeout=timeout, follow_redirects=False, trust_env=False, transport=transport
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    endpoint,
+                    headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+                    json={
+                        "model": str(config["model_name"]),
+                        "messages": [{"role": "user", "content": _AI_MANUAL_TEST_PROMPT}],
+                        "max_tokens": 10,
+                        "stream": False,
+                    },
+                ) as response:
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > _AI_MANUAL_TEST_MAX_RESPONSE_BYTES:
+                            return _manual_test_result("error", "服务响应超出大小限制。", int((time.perf_counter() - started) * 1000))
+                    latency = int((time.perf_counter() - started) * 1000)
+                    if 300 <= response.status_code < 400:
+                        return _manual_test_result("error", "服务返回重定向，已阻止。", latency)
+                    if response.status_code == 401 or response.status_code == 403:
+                        return _manual_test_result("auth_failed", "认证失败。", latency)
+                    if response.status_code == 429:
+                        return _manual_test_result("rate_limited", "服务限流。", latency)
+                    if response.status_code == 404:
+                        return _manual_test_result("model_unavailable", "模型或接口不可用。", latency)
+                    if response.status_code < 200 or response.status_code >= 300:
+                        return _manual_test_result("error", "服务请求失败。", latency)
+                    try:
+                        payload = json.loads(body)
+                        choices = payload.get("choices") if isinstance(payload, dict) else None
+                        if not isinstance(choices, list) or not choices:
+                            raise ValueError("invalid_response")
+                    except (ValueError, UnicodeError):
+                        return _manual_test_result("error", "服务响应格式无效。", latency)
+                    return _manual_test_result("success", "AI 模型连接测试成功。", latency)
+
+        return await asyncio.wait_for(request_once(), timeout=_AI_MANUAL_TEST_TIMEOUT_SECONDS)
+    except (httpx.TimeoutException, asyncio.TimeoutError):
+        return _manual_test_result("unknown", "请求超时，服务端是否处理或计费未知。", int((time.perf_counter() - started) * 1000))
+    except Exception as exc:
+        logger.warning("手动AI测试请求失败", extra={"event": "ai_manual_test_failed", "error_type": type(exc).__name__})
+        return _manual_test_result("unknown", "网络请求结果未知。", int((time.perf_counter() - started) * 1000))
+
+
+async def run_portable_ai_manual_test(
+    user: Optional[dict],
+    request_id: str,
+    settings: Optional[dict],
+    *,
+    saved_config_snapshot: Any = _CONFIG_SNAPSHOT_UNSET,
+) -> Dict[str, Any]:
+    """Run/deduplicate portable manual tests without touching the saved health snapshot."""
+    owner_id = _resolve_user_id(user) or "anonymous"
+    cache_id = f"{owner_id}:{request_id}"
+    backend = (STORAGE_BACKEND() or "local").lower()
+    if saved_config_snapshot is _CONFIG_SNAPSHOT_UNSET and backend == "postgres":
+        try:
+            saved_config_snapshot = _current_postgres_ai_config(user) or {}
+        except Exception as exc:
+            logger.error(
+                "Manual AI test config snapshot failed",
+                extra={"event": "ai_manual_test_config_snapshot_failed", "error_type": type(exc).__name__},
+            )
+            return _manual_test_result("error", "AI 配置暂时不可用，请重新读取后再试。")
+    if saved_config_snapshot is _CONFIG_SNAPSHOT_UNSET:
+        # Non-PostgreSQL Web mode has no persisted per-user row identity.
+        fingerprint_snapshot = None
+    else:
+        fingerprint_snapshot = saved_config_snapshot
+    try:
+        fingerprint = _manual_test_fingerprint(
+            backend=backend,
+            settings=settings,
+            saved_config_snapshot=fingerprint_snapshot,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return _manual_test_result("rejected", "AI 测试设置无效，未发送请求。")
+    with _AI_MANUAL_TEST_LOCK:
+        bound_fingerprint = _AI_MANUAL_TEST_FINGERPRINTS.get(cache_id)
+        if bound_fingerprint is not None and not hmac.compare_digest(bound_fingerprint, fingerprint):
+            return _manual_test_result("conflict", "此请求 ID 已绑定到另一组测试设置，请重新确认后再试。")
+        previous = _AI_MANUAL_TEST_RESULTS.get(cache_id)
+        if previous is not None:
+            if bound_fingerprint is None:
+                _AI_MANUAL_TEST_FINGERPRINTS[cache_id] = fingerprint
+            return copy.deepcopy(previous)
+        task = _AI_MANUAL_TEST_INFLIGHT.get(cache_id)
+        if task is None:
+            calls = _AI_MANUAL_TEST_CALLS.setdefault(owner_id, deque())
+            now = time.monotonic()
+            while calls and now - calls[0] >= 60:
+                calls.popleft()
+            if len(calls) >= 5:
+                return _manual_test_result("rate_limited", "手动测试频率过高，请稍后再试。")
+            calls.append(now)
+            if bound_fingerprint is None:
+                _AI_MANUAL_TEST_FINGERPRINTS[cache_id] = fingerprint
+            if saved_config_snapshot is _CONFIG_SNAPSHOT_UNSET:
+                task = asyncio.create_task(_perform_portable_ai_manual_test(user, settings))
+            else:
+                task = asyncio.create_task(
+                    _perform_portable_ai_manual_test(
+                        user, settings, saved_config_snapshot=saved_config_snapshot,
+                    )
+                )
+            _AI_MANUAL_TEST_INFLIGHT[cache_id] = task
+            task.add_done_callback(lambda finished: _remember_manual_test_result(cache_id, finished))
+        elif bound_fingerprint is None:
+            _AI_MANUAL_TEST_FINGERPRINTS[cache_id] = fingerprint
+    # Disconnecting/cancelling the HTTP request must not cancel the one provider
+    # attempt or erase its request ID while the provider may already have billed it.
+    try:
+        return copy.deepcopy(await asyncio.shield(task))
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise
+        return _manual_test_result("unknown", "测试任务被取消，服务端是否处理或计费未知。")
+
+
+def _remember_manual_test_result(cache_id: str, task: asyncio.Task) -> None:
+    try:
+        result = task.result()
+    except asyncio.CancelledError:
+        result = _manual_test_result("unknown", "测试任务被取消，服务端是否处理或计费未知。")
+    except Exception as exc:
+        logger.error("手动AI测试任务异常", extra={"event": "ai_manual_test_task_failed", "error_type": type(exc).__name__})
+        result = _manual_test_result("unknown", "测试请求结果未知。")
+    with _AI_MANUAL_TEST_LOCK:
+        _AI_MANUAL_TEST_RESULTS[cache_id] = copy.deepcopy(result)
+        if _AI_MANUAL_TEST_INFLIGHT.get(cache_id) is task:
+            _AI_MANUAL_TEST_INFLIGHT.pop(cache_id, None)
+        while len(_AI_MANUAL_TEST_RESULTS) > _AI_MANUAL_TEST_RESULT_LIMIT:
+            evicted_id = next(iter(_AI_MANUAL_TEST_RESULTS))
+            _AI_MANUAL_TEST_RESULTS.pop(evicted_id)
+            _AI_MANUAL_TEST_FINGERPRINTS.pop(evicted_id, None)
+
+
+async def _perform_portable_ai_manual_test(
+    user: Optional[dict],
+    settings: Optional[dict],
+    *,
+    saved_config_snapshot: Any = _CONFIG_SNAPSHOT_UNSET,
+) -> Dict[str, Any]:
+    overrides = settings if isinstance(settings, dict) else {}
+    if saved_config_snapshot is _CONFIG_SNAPSHOT_UNSET:
+        config = _resolve_effective_ai_config(user, overrides=overrides)
+    else:
+        config = _resolve_effective_ai_config(
+            user, overrides=overrides, persisted_config=saved_config_snapshot,
+        )
+
+    # The manual path pins the provider hostname to its validated public IP.
+    # The configured proxy path cannot currently preserve that destination pin,
+    # so never silently bypass an enabled proxy or weaken the SSRF protection.
+    if config.get("proxy_ai_enabled"):
+        return _manual_test_result(
+            "rejected",
+            "当前配置启用了 AI 代理；手动测试暂不支持代理，未发送请求。",
+        )
+
+    # A changed target requires a replacement key in this request; do not silently reuse
+    # credentials that were saved for a different origin.
+    if saved_config_snapshot is _CONFIG_SNAPSHOT_UNSET:
+        saved_config = _resolve_effective_ai_config(user)
+    else:
+        saved_config = _resolve_effective_ai_config(user, persisted_config=saved_config_snapshot)
+    if _origin(config.get("base_url")) != _origin(saved_config.get("base_url")):
+        if not str(overrides.get("OPENAI_API_KEY") or "").strip():
+            return _manual_test_result("rejected", "目标地址已更改，请为新目标重新输入 API Key。")
+    return await _send_manual_ai_test(config)
+
+
+def _origin(value: Any) -> tuple:
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        return (parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port)
+    except ValueError:
+        return ()

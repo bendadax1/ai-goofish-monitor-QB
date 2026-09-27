@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.logging_config import get_logger
-from src.web.ai_health import get_ai_health_snapshot, run_ai_health_check
+import re
+
+import src.config
+from src.web.ai_health import get_ai_health_snapshot, run_ai_health_check, run_portable_ai_manual_test
 from src.web.auth import check_permission, has_category, require_auth
 
 
@@ -42,6 +45,8 @@ async def get_ai_health(user: dict = Depends(_require_ai_access)):
 @router.post("/api/settings/health/ai/check")
 async def run_ai_health(payload: dict = None, user: dict = Depends(_require_ai_access)):
     """执行 AI API 可用性检测并返回最新结果。"""
+    if src.config.PORTABLE_MODE:
+        raise HTTPException(status_code=403, detail="便携模式请使用需明确确认的手动 AI 测试入口")
     options = payload if isinstance(payload, dict) else {}
     overrides = options.get("settings") if isinstance(options.get("settings"), dict) else None
     run_web = _parse_bool(options.get("run_web"), default=True)
@@ -69,6 +74,19 @@ async def run_ai_health(payload: dict = None, user: dict = Depends(_require_ai_a
 @router.post("/api/settings/ai/test")
 async def test_ai_settings(settings: dict, user: dict = Depends(_require_ai_access)):
     """测试 AI 模型配置是否可用（从 Web 进程发起）。"""
+    if src.config.PORTABLE_MODE:
+        options = settings if isinstance(settings, dict) else {}
+        if options.get("confirmed") is not True:
+            raise HTTPException(status_code=400, detail="发送测试请求前必须明确确认目标服务、模型及可能费用")
+        request_id = options.get("request_id")
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+            raise HTTPException(status_code=400, detail="缺少有效的测试请求 ID")
+        overrides = options.get("settings") if isinstance(options.get("settings"), dict) else {
+            key: value for key, value in options.items() if key not in {"confirmed", "request_id"}
+        }
+        result = await run_portable_ai_manual_test(user, request_id, overrides)
+        return {"success": result.get("status") == "success", "message": result["message"], "test": result}
+
     snapshot = await run_ai_health_check(
         user,
         overrides=settings if isinstance(settings, dict) else None,
@@ -89,6 +107,8 @@ async def test_ai_settings(settings: dict, user: dict = Depends(_require_ai_acce
 @router.post("/api/settings/ai/test/backend")
 async def test_ai_settings_backend(user: dict = Depends(_require_ai_access)):
     """测试 AI 模型配置是否可用（从后端容器环境发起）。"""
+    if src.config.PORTABLE_MODE:
+        raise HTTPException(status_code=403, detail="便携模式不提供自动后端 AI 检测")
     snapshot = await run_ai_health_check(
         user,
         run_web=False,

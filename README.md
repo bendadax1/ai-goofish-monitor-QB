@@ -4,6 +4,8 @@
 
 # 咸鱼 AI 智能推荐机器人
 
+开发与维护请遵守 [仓库卫生守则](REPOSITORY_HYGIENE.md)，统一管理临时文件、空间预算和安全清理。
+
 > 基于 **Playwright** 与 **AI 多模态模型**的闲鱼智能推荐机器人，采用朴素贝叶斯模型 + AI 人群画像 + AI 视觉判断的**三维加权推荐引擎**，提供完整的 Web 管理界面，自动化过滤商品链接，个性化挑选优质商品，支持多种通知渠道即时触达。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](License)
@@ -124,7 +126,7 @@
 ---
 
 ## 🆕 版本更新
-最新版本：`V1.0.4.5`
+最新版本：`V1.1.0.0-beta`（[版本说明与验收边界](docs/RELEASE_1.1.0.0-beta.md)）
 
 完整更新记录请查看：[changelog.md](changelog.md)
 
@@ -1068,6 +1070,7 @@ python-multipart
 
 - [GitHub 仓库](https://github.com/banbanzhige/ai-goofish-monitor-QB)
 - [Docker Hub](https://hub.docker.com/r/banbanzhige/ai-goofish-monitor-qb)
+- [Windows x64 便携版预览指南](docs/PORTABLE_RELEASE_GUIDE.md)
 - [Chrome 扩展](https://chromewebstore.google.com/detail/xianyu-login-state-extrac/eidlpfjiodpigmfcahkmlenhppfklcoa)
 - [Cron 表达式生成器](https://crontab.guru/)
 

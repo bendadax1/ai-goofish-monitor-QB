@@ -1,4 +1,4 @@
-﻿﻿// 全局交互事件委托
+// 全局交互事件委托
 var appInteractionsInitialized = false;
 
 function initAppInteractions(mainContent) {

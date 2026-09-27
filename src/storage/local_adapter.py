@@ -1,4 +1,4 @@
-﻿"""
+"""
 Local Storage Adapter - 本地文件存储适配器
 
 实现 StorageInterface，使用本地 JSON/JSONL 文件存储数据。

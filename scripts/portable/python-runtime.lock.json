@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "component": "python-runtime",
+  "version": "3.13.15",
+  "platform": "windows-x64",
+  "file_name": "python-3.13.15-embed-amd64.zip",
+  "url": "https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip",
+  "source_page": "https://www.python.org/downloads/release/python-31315/",
+  "archive_bytes": 11009825,
+  "sha256": "d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf",
+  "verification": "python_org_published_sha256",
+  "signature_verified": false,
+  "python_dll": "python313.dll",
+  "pth_file": "python313._pth",
+  "requirements_input": "requirements-python.in",
+  "requirements_lock": "requirements-python.lock.txt",
+  "playwright_version": "1.57.0"
+}

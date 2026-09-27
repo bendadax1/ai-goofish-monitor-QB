@@ -23,14 +23,19 @@ from fastapi.staticfiles import StaticFiles
 from src.storage import get_storage
 from src.storage.utils import verify_password, hash_token
 from src.logging_config import get_logger
-from src.config import STORAGE_BACKEND, WEB_USERNAME, WEB_PASSWORD
+from src.config import PORTABLE_MODE, STORAGE_BACKEND, WEB_USERNAME, WEB_PASSWORD
+from src.portable.app_paths import get_portable_runtime_paths
 
 
 # 配置
 SECRET_KEY = os.getenv("SECRET_KEY", "xianyu-monitor-default-secret-key-change-me")
+if PORTABLE_MODE and (len(SECRET_KEY.encode("utf-8")) < 32 or SECRET_KEY == "xianyu-monitor-default-secret-key-change-me"):
+    raise RuntimeError("便携版必须由 Launcher 提供非默认会话密钥")
 SESSION_COOKIE_NAME = "session_token"
 SESSION_EXPIRE_SECONDS = int(os.getenv("SESSION_EXPIRE_SECONDS", 7 * 24 * 60 * 60))  # 默认7天
 RBAC_CONFIG_FILE = os.path.join("state", "rbac_config.json")
+if PORTABLE_MODE:
+    RBAC_CONFIG_FILE = str(get_portable_runtime_paths().data_path("state", "rbac_config.json"))
 
 # logger
 logger = get_logger(__name__, service="web")
@@ -382,7 +387,7 @@ def verify_user(username: str, password: str) -> Optional[dict]:
         storage = get_storage()
         user = storage.get_user_by_username(username)
         
-        if user and user.get('password_hash'):
+        if user and user.get('password_hash') and (not PORTABLE_MODE or user.get('is_active', False)):
             if verify_password(password, user['password_hash']):
                 # 更新最后登录时间
                 storage.update_user(user['id'], {'last_login_at': time.strftime('%Y-%m-%dT%H:%M:%SZ')})
@@ -424,6 +429,10 @@ def create_session_token(user_data: dict) -> str:
     创建签名的session token
     格式: base64(json_data).signature
     """
+    if PORTABLE_MODE:
+        from src.portable.sessions import issue_session
+        return issue_session(get_storage(), user_data["user_id"], SESSION_EXPIRE_SECONDS)
+
     session_data = {
         **user_data,
         "login_time": int(time.time()),
@@ -440,6 +449,10 @@ def verify_session_token(token: str) -> Optional[dict]:
     验证并解析session token
     返回用户数据或None
     """
+    if PORTABLE_MODE:
+        from src.portable.sessions import read_session
+        return read_session(get_storage(), token)
+
     if not token or '.' not in token:
         return None
     
@@ -626,8 +639,19 @@ def set_session_cookie(response: Response, user_data: dict):
     )
 
 
-def clear_session_cookie(response: Response):
+def clear_session_cookie(response: Response, request: Optional[Request] = None):
     """清除session cookie"""
+    if request is not None:
+        try:
+            from src.portable.launcher_pairing import invalidate_launcher_sessions_for_browser_token
+            invalidate_launcher_sessions_for_browser_token(request.cookies.get(SESSION_COOKIE_NAME, ""))
+        except Exception:
+            # The Web session itself is still revoked below. Launcher requests
+            # also revalidate this source session before returning user data.
+            logger.error("Launcher session logout invalidation failed", extra={"event": "launcher_logout_invalidation_failed"})
+    if PORTABLE_MODE and request is not None:
+        from src.portable.sessions import revoke_session
+        revoke_session(get_storage(), request.cookies.get(SESSION_COOKIE_NAME))
     response.delete_cookie(key=SESSION_COOKIE_NAME)
 
 

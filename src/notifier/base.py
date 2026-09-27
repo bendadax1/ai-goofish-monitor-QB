@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import re
 from abc import ABC, abstractmethod

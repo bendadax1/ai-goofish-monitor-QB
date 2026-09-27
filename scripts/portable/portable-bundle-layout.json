@@ -1,0 +1,26 @@
+{
+  "format_version": 1,
+  "platform": "windows-x64",
+  "release_status": "preview-integration",
+  "launcher": {
+    "relative_dir": ".",
+    "executable": "AiGoofish.Launcher.App.exe"
+  },
+  "app": {
+    "schema_min": 1,
+    "schema_max": 1
+  },
+  "runtime": {
+    "executable_relative_path": "python.exe"
+  },
+  "browser": {
+    "executable_relative_path": "chrome-win64/chrome.exe"
+  },
+  "postgres": {
+    "relative_dir_prefix": "postgres"
+  },
+  "data": {
+    "relative_dir": "data",
+    "created_on_first_run": true
+  }
+}

@@ -20,6 +20,9 @@ config.json
 logs/
 
 # 产生的文件
+/.tmp/
+/launcher/**/bin/
+/launcher/**/obj/
 jsonl/
 requirement/
 criteria/
@@ -42,6 +45,21 @@ build/
 升级.txt
 upgrade.txt
 docs/
+# 仅纳入便携版正式文档，其他历史文档维持忽略
+!/docs/
+/docs/*
+!/docs/PORTABLE_LAUNCHER_PLAN.md
+!/docs/PORTABLE_P0_DATA_MAP.md
+!/docs/PORTABLE_BACKEND_CONTRACT.md
+!/docs/PORTABLE_BUNDLE_CONTRACT.md
+!/docs/PORTABLE_ACCEPTANCE_STATUS.md
+!/docs/PORTABLE_LOCAL_ACCEPTANCE.md
+!/docs/PORTABLE_BACKUP_CONTRACT.md
+!/docs/PORTABLE_THIRD_PARTY_INVENTORY.md
+!/docs/PORTABLE_RELEASE_GUIDE.md
+!/docs/LAUNCHER_DEVELOPMENT.md
+!/docs/LAUNCHER_REFACTOR_EXECUTION.md
+!/docs/RELEASE_1.1.0.0-beta.md
 
 
 # 忽略gitignore和dockerignore文件本身
@@ -53,6 +71,7 @@ docs/
 /state
 /example
 AGENTS.md
+!/AGENTS.md
 images/logo/banner.psd
 CLAUDE.md
 GEMINI.md

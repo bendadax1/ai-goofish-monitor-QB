@@ -1,4 +1,4 @@
-﻿## Bayes 参数文件结构（bayes_v1.json）
+## Bayes 参数文件结构（bayes_v1.json）
 文件包含两块：
 1. **recommendation_fusion**：推荐度融合权重与评分规则（可配置）。
 2. **bayes_feature_rules + feature_names + _samples**：Bayes 先验参数与样本集。

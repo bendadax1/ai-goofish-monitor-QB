@@ -5,8 +5,10 @@ from datetime import datetime
 
 from playwright.async_api import async_playwright
 from src.logging_config import setup_logging, get_logger
+from src.portable.app_paths import get_portable_runtime_paths, portable_browser_executable
 
-STATE_DIR = "state"
+_portable_runtime_paths = get_portable_runtime_paths()
+STATE_DIR = str(_portable_runtime_paths.data_path("state")) if _portable_runtime_paths is not None else "state"
 COOKIE_ALLOWED_DOMAINS = ("goofish.com",)
 LOGIN_COOKIE_NAMES = {"_m_h5_tk", "cookie2", "sgcookie"}
 
@@ -354,7 +356,10 @@ async def main():
             "args": ["--disable-web-security", "--allow-running-insecure-content"]
         }
 
-        if login_is_edge:
+        portable_browser = portable_browser_executable()
+        if portable_browser is not None:
+            browser = await p.chromium.launch(executable_path=str(portable_browser), **launch_options)
+        elif login_is_edge:
             browser = await p.chromium.launch(channel="msedge", **launch_options)
         else:
             if running_in_docker:

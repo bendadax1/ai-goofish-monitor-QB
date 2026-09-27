@@ -24,6 +24,7 @@ from src.storage import get_storage
 from src.config import WEB_USERNAME, WEB_PASSWORD, STORAGE_BACKEND
 from src.logging_config import get_logger
 from src.storage.utils import verify_password
+from src.portable.app_paths import get_portable_runtime_paths
 
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -765,6 +766,12 @@ async def switch_account(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="创建会话失败"
         )
+
+    try:
+        from src.portable.launcher_pairing import invalidate_launcher_sessions_for_browser_token
+        invalidate_launcher_sessions_for_browser_token(request.cookies.get("session_token", ""))
+    except Exception:
+        logger.error("Launcher session account-switch invalidation failed", extra={"event": "launcher_switch_invalidation_failed"})
     
     log_audit_action(user, "switch_account", "user", data.user_id,
                      details={"target_username": target_user.get("username")},
@@ -1596,7 +1603,12 @@ async def update_my_profile(
 
 
 # 头像存储目录
-AVATAR_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "static", "avatars")
+_portable_runtime_paths = get_portable_runtime_paths()
+AVATAR_DIR = (
+    str(_portable_runtime_paths.data_path("assets", "avatars"))
+    if _portable_runtime_paths is not None
+    else os.path.join(os.path.dirname(__file__), "..", "..", "static", "avatars")
+)
 os.makedirs(AVATAR_DIR, exist_ok=True)
 
 # 头像大小限制

@@ -1,4 +1,4 @@
-﻿﻿// --- API 函数 ---
+// --- API 函数 ---
 async function fetchNotificationSettings() {
     try {
         const response = await fetch('/api/settings/notifications');
@@ -89,8 +89,21 @@ async function updateAISettings(settings) {
             body: JSON.stringify(settings),
         });
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || '更新AI设置失败');
+            let errorData = {};
+            try {
+                errorData = await response.json();
+            } catch (parseError) {
+                console.error('无法解析AI设置保存错误:', parseError);
+            }
+            const detail = errorData.detail;
+            if (response.status === 409) {
+                return {
+                    conflict: true,
+                    message: (detail && typeof detail === 'object' ? detail.message : detail) || 'AI配置已在其他页面修改。',
+                    current_revision: detail && typeof detail === 'object' ? detail.current_revision : undefined,
+                };
+            }
+            throw new Error((detail && typeof detail === 'object' ? detail.message : detail) || '更新AI设置失败');
         }
         return await response.json();
     } catch (error) {
@@ -119,8 +132,21 @@ async function updateProxySettings(settings) {
             body: JSON.stringify(settings),
         });
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || '更新代理设置失败');
+            let errorData = {};
+            try {
+                errorData = await response.json();
+            } catch (parseError) {
+                console.error('无法解析代理设置保存错误:', parseError);
+            }
+            const detail = errorData.detail;
+            if (response.status === 409) {
+                return {
+                    conflict: true,
+                    message: (detail && typeof detail === 'object' ? detail.message : detail) || 'AI配置已在其他页面修改。',
+                    current_revision: detail && typeof detail === 'object' ? detail.current_revision : undefined,
+                };
+            }
+            throw new Error((detail && typeof detail === 'object' ? detail.message : detail) || '更新代理设置失败');
         }
         return await response.json();
     } catch (error) {
@@ -149,12 +175,15 @@ async function migrateAiProxySettingsToCurrentUser() {
 }
 
 async function testAISettings(settings, options = {}) {
-    const { silent = false } = options;
+    const { silent = false, request_id, confirmed } = options;
     try {
+        const payload = { ...settings };
+        if (request_id !== undefined) payload.request_id = request_id;
+        if (confirmed !== undefined) payload.confirmed = confirmed;
         const response = await fetch('/api/settings/ai/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(settings),
+            body: JSON.stringify(payload),
         });
         if (!response.ok) {
             const errorData = await response.json();

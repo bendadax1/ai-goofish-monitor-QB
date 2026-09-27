@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.engine.url import make_url
 
-from src.config import get_env_value, STORAGE_BACKEND, normalize_database_url
 from src.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -22,6 +21,8 @@ logger = get_logger(__name__, service="system")
 
 def _validate_database_url(database_url: str) -> str:
     """校验并规范化数据库连接地址，避免常见输入错误"""
+    from src.config import normalize_database_url
+
     if not database_url:
         return ""
     
@@ -63,29 +64,37 @@ def get_storage() -> "StorageInterface":
     
     if _storage_instance is not None:
         return _storage_instance
-    
+
+    # Importing models for explicit schema maintenance must not load .env or
+    # initialize application paths. Business configuration is needed only when
+    # a caller actually requests the normal storage adapter.
+    from src.config import DATABASE_URL, PORTABLE_MODE, STORAGE_BACKEND
+
     backend = STORAGE_BACKEND()
     
     if backend == 'postgres':
         from .postgres_adapter import PostgresAdapter
-        raw_database_url = get_env_value("DATABASE_URL", "")
+        # In portable mode DATABASE_URL() only exposes the Launcher-managed
+        # GOOFISH_PORTABLE_DATABASE_URL; it never falls back to a .env value.
+        raw_database_url = DATABASE_URL()
         database_url = _validate_database_url(raw_database_url)
         if not database_url:
             raise ValueError("DATABASE_URL environment variable is required for postgres backend")
         _storage_instance = PostgresAdapter(database_url)
-        try:
-            _storage_instance.create_tables()
-            logger.info(
-                "PostgreSQL schema ensure completed",
-                extra={"event": "postgres_schema_ensure_done"}
-            )
-        except Exception as e:
-            logger.error(
-                "PostgreSQL schema ensure failed",
-                extra={"event": "postgres_schema_ensure_failed"},
-                exc_info=e
-            )
-            raise
+        if not PORTABLE_MODE:
+            try:
+                _storage_instance.create_tables()
+                logger.info(
+                    "PostgreSQL schema ensure completed",
+                    extra={"event": "postgres_schema_ensure_done"}
+                )
+            except Exception as e:
+                logger.error(
+                    "PostgreSQL schema ensure failed",
+                    extra={"event": "postgres_schema_ensure_failed"},
+                    exc_info=e
+                )
+                raise
     else:
         from .local_adapter import LocalStorageAdapter
         _storage_instance = LocalStorageAdapter()

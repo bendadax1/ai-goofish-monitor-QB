@@ -1,4 +1,4 @@
-﻿"""
+"""
 账号管理模块 - 统一支持本地模式与多用户模式
 """
 import os
@@ -14,12 +14,14 @@ from pydantic import BaseModel
 from src.storage import get_storage
 from src.web.auth import get_current_user, is_multi_user_mode
 from src.logging_config import get_logger
+from src.portable.app_paths import get_portable_runtime_paths
 
 
 router = APIRouter()
 logger = get_logger(__name__, service="web")
 
-STATE_DIR = "state"
+_portable_runtime_paths = get_portable_runtime_paths()
+STATE_DIR = str(_portable_runtime_paths.data_path("state")) if _portable_runtime_paths is not None else "state"
 ACTIVE_ACCOUNT_FILE = os.path.join(STATE_DIR, "_active.json")
 SYSTEM_ACCOUNT_FIELDS = {
     "display_name",

@@ -1,4 +1,4 @@
-﻿// --- 渲染函数 ---
+// --- 渲染函数 ---
 function renderLoginStatusWidget(status) {
     const container = document.getElementById('login-status-widget-container');
     if (!container) return;

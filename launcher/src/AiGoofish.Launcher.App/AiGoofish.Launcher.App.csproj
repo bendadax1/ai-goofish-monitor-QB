@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Version>1.1.0.0-beta</Version>
+    <InformationalVersion>1.1.0.0-beta</InformationalVersion>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(LauncherDevelopmentEnabled)' == 'true'">
+    <DefineConstants>$(DefineConstants);LAUNCHER_DEVELOPMENT</DefineConstants>
+  </PropertyGroup>
+
+  <Target Name="RejectDevelopmentPublish" BeforeTargets="Publish" Condition="'$(LauncherDevelopmentEnabled)' == 'true'">
+    <Error Text="开发入口构建不能发布；请使用独立的正常发行构建。" />
+  </Target>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiGoofish.Launcher.Core\AiGoofish.Launcher.Core.csproj" />
+    <ProjectReference Include="..\AiGoofish.Launcher.Platform.Windows\AiGoofish.Launcher.Platform.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="..\..\..\images\logo\favicon 32x32.png" Link="Assets\launcher-tray.png" />
+    <AvaloniaResource Include="Assets\market-banner.png" />
+  </ItemGroup>
+</Project>

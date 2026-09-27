@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from src.logging_config import get_logger
+from src.portable.app_paths import get_portable_runtime_paths
 
 # 获取logger
 logger = get_logger(__name__, service="web")
@@ -18,6 +19,9 @@ _ANSI_ESCAPE_RE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 
 # 日志目录配置
 LOG_DIR = os.path.join("logs")
+_portable_paths = get_portable_runtime_paths()
+if _portable_paths is not None:
+    LOG_DIR = str(_portable_paths.data_path("logs"))
 LEGACY_LOG_FILE = os.path.join(LOG_DIR, "fetcher.log")
 SYSTEM_LOG_FILE = os.path.join(LOG_DIR, "system.log")
 ERROR_LOG_FILE = os.path.join(LOG_DIR, "error.log")
@@ -258,7 +262,7 @@ async def export_logs(
     
     生成一个包含近N天日志文件的ZIP包
     """
-    from src.log_exporter import export_logs_package, cleanup_old_exports
+    from src.log_exporter import export_logs_package
     from fastapi.responses import FileResponse
     
     try:
@@ -271,8 +275,8 @@ async def export_logs(
         if not zip_path or not os.path.exists(zip_path):
             raise HTTPException(status_code=500, detail="导出日志包失败")
         
-        # 清理旧的导出文件
-        cleanup_old_exports(keep_count=5)
+        # Export does not authorize deleting earlier diagnostic evidence.
+        # Old packages are retained until the user explicitly deletes them.
         
         # 返回文件下载
         filename = os.path.basename(zip_path)

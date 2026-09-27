@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiGoofish.Launcher.Core\AiGoofish.Launcher.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AiGoofish.Launcher.Platform.Windows.Tests" />
+    <InternalsVisibleTo Include="AiGoofish.Launcher.Postgres.Tests" />
+    <InternalsVisibleTo Include="AiGoofish.Launcher.Python.Tests" />
+  </ItemGroup>
+</Project>

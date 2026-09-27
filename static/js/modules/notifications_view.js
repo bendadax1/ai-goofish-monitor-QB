@@ -1,4 +1,4 @@
-﻿﻿// 通知视图（本地模式使用 .env，服务器模式使用用户私有配置）
+// 通知视图（本地模式使用 .env，服务器模式使用用户私有配置）
 
 const NOTIFICATION_CHANNEL_META = {
     wx_app: {

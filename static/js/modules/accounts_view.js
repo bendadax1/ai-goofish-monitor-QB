@@ -1,4 +1,4 @@
-﻿﻿// 账号管理视图
+// 账号管理视图
 async function initializeAccountsView() {
     const container = document.getElementById('accounts-table-container');
     const addBtn = document.getElementById('add-account-btn');

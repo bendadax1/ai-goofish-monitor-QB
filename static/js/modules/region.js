@@ -1,4 +1,4 @@
-﻿﻿function validateTaskFiltersForm(provinceId, cityId, districtId, publishSelectId) {
+function validateTaskFiltersForm(provinceId, cityId, districtId, publishSelectId) {
     const publishSelect = document.getElementById(publishSelectId);
     const publishValue = publishSelect ? publishSelect.value.trim() : '';
 

@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Dict, List, Optional
 
+from src.portable.app_paths import get_portable_runtime_paths
 
-_USER_FILE_ROOT = Path("state") / "user_files"
 _KIND_CONFIG: Dict[str, Dict[str, object]] = {
     "prompts": {
         "shared_dir": Path("prompts"),
@@ -38,6 +38,44 @@ _KIND_CONFIG: Dict[str, Dict[str, object]] = {
 }
 
 
+def _user_file_root() -> Path:
+    """Return the private user-file root for the selected execution mode."""
+
+    paths = get_portable_runtime_paths()
+    if paths is not None:
+        return paths.data_path("state", "user_files")
+    return Path("state") / "user_files"
+
+
+def _shared_dir(kind: str) -> Path:
+    """Return the writable shared directory for ``kind``."""
+
+    config = _KIND_CONFIG[kind]
+    paths = get_portable_runtime_paths()
+    if paths is None:
+        return Path(str(config["shared_dir"]))
+    if kind == "bayes":
+        return paths.data_path("assets", "prompts", "bayes")
+    return paths.data_path("assets", str(config["user_subdir"]))
+
+
+def _default_dir(kind: str) -> Optional[Path]:
+    """Return an optional read-only portable seed directory.
+
+    Defaults are deliberately limited to the future distribution layout. The
+    source repository's live prompts and criteria are never treated as portable
+    seeds before they are explicitly packaged under ``program/defaults``.
+    """
+
+    paths = get_portable_runtime_paths()
+    if paths is None:
+        return None
+    if kind == "bayes":
+        return paths.program_path("defaults", "prompts", "bayes")
+    config = _KIND_CONFIG[kind]
+    return paths.program_path("defaults", str(config["user_subdir"]))
+
+
 def normalize_owner_id(owner_id: Optional[str]) -> Optional[str]:
     """标准化 owner_id。"""
     text = str(owner_id or "").strip()
@@ -58,6 +96,27 @@ def _validate_kind(kind: str) -> str:
 
 def _safe_filename(filename: str) -> str:
     text = str(filename or "").strip().replace("\\", "/")
+    portable_paths = get_portable_runtime_paths()
+    if portable_paths is not None:
+        windows_path = PureWindowsPath(text)
+        reserved_stems = {
+            "CON", "PRN", "AUX", "NUL",
+            *(f"COM{number}" for number in range(1, 10)),
+            *(f"LPT{number}" for number in range(1, 10)),
+        }
+        if (
+            not text
+            or "\x00" in text
+            or "/" in text
+            or windows_path.anchor
+            or text in {".", ".."}
+            or ":" in text
+            or any(character in text for character in '<>"|?*')
+            or any(ord(character) < 32 for character in text)
+            or text.rstrip(". ") != text
+            or text.split(".", 1)[0].upper() in reserved_stems
+        ):
+            raise ValueError("便携版文件名必须是安全的单个文件名")
     text = text.split("/")[-1]
     if not text:
         raise ValueError("文件名不能为空")
@@ -73,15 +132,14 @@ def get_user_scoped_path(kind: str, filename: str, owner_id: Optional[str]) -> P
     config = _KIND_CONFIG[normalized_kind]
     safe_owner = _sanitize_owner_fragment(normalized_owner)
     safe_name = _safe_filename(filename)
-    return _USER_FILE_ROOT / safe_owner / str(config["user_subdir"]) / safe_name
+    return _user_file_root() / safe_owner / str(config["user_subdir"]) / safe_name
 
 
 def get_shared_path(kind: str, filename: str) -> Path:
     """返回共享目录路径。"""
     normalized_kind = _validate_kind(kind)
-    config = _KIND_CONFIG[normalized_kind]
     safe_name = _safe_filename(filename)
-    return Path(str(config["shared_dir"])) / safe_name
+    return _shared_dir(normalized_kind) / safe_name
 
 
 def get_scoped_read_candidates(kind: str, filename: str, owner_id: Optional[str]) -> List[Path]:
@@ -91,6 +149,9 @@ def get_scoped_read_candidates(kind: str, filename: str, owner_id: Optional[str]
     if normalized_owner:
         candidates.append(get_user_scoped_path(kind, filename, normalized_owner))
     candidates.append(get_shared_path(kind, filename))
+    default_dir = _default_dir(_validate_kind(kind))
+    if default_dir is not None:
+        candidates.append(default_dir / _safe_filename(filename))
     return candidates
 
 
@@ -138,9 +199,18 @@ def list_scoped_files(kind: str, owner_id: Optional[str], include_shared: bool =
                 names.add(entry.name)
 
     if include_shared:
-        shared_dir = Path(str(config["shared_dir"]))
+        shared_dir = _shared_dir(normalized_kind)
         if shared_dir.exists():
             for entry in shared_dir.iterdir():
+                if not entry.is_file():
+                    continue
+                if expected_ext and entry.suffix.lower() != expected_ext:
+                    continue
+                names.add(entry.name)
+
+        default_dir = _default_dir(normalized_kind)
+        if default_dir is not None and default_dir.exists():
+            for entry in default_dir.iterdir():
                 if not entry.is_file():
                     continue
                 if expected_ext and entry.suffix.lower() != expected_ext:
@@ -169,7 +239,18 @@ def resolve_virtual_task_file(raw_path: str, owner_id: Optional[str], for_write:
         return Path(text)
     normalized = text.replace("\\", "/")
 
-    # 绝对路径按原样处理（兼容历史任务）
+    portable_paths = get_portable_runtime_paths()
+    if portable_paths is not None:
+        path_parts = Path(normalized).parts
+        if (
+            os.path.isabs(normalized)
+            or Path(normalized).drive
+            or PureWindowsPath(normalized).anchor
+            or ".." in path_parts
+        ):
+            raise ValueError("便携版任务文件路径必须是受支持的相对虚拟路径")
+
+    # Legacy absolute paths are retained for historical task compatibility.
     if os.path.isabs(normalized) or Path(normalized).drive:
         return Path(normalized)
 
@@ -189,5 +270,8 @@ def resolve_virtual_task_file(raw_path: str, owner_id: Optional[str], for_write:
     # 兼容老数据：裸文件名默认按 prompts 处理
     if "/" not in normalized and normalized.lower().endswith(".txt"):
         return resolve_scoped_path("prompts", normalized, owner_id=owner_id, for_write=for_write)
+
+    if portable_paths is not None:
+        raise ValueError("便携版任务文件路径必须使用受支持的虚拟目录")
 
     return Path(normalized)

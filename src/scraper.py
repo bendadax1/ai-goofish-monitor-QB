@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import os
 import random
@@ -48,6 +48,7 @@ from src.utils import (
     save_to_jsonl,
     log_time,
 )
+from src.portable.app_paths import get_portable_runtime_paths, portable_browser_executable
 
 # 新结构下推荐等级的推荐集合（与运行期口径一致）
 RECOMMENDED_LEVELS = {"STRONG_BUY", "CAUTIOUS_BUY", "CONDITIONAL_BUY"}
@@ -625,7 +626,12 @@ async def refresh_account_cookies(context, state_file_path: str, last_fingerprin
 
 
 # 统计数据存储目录
-STATS_DIR = "task_stats"
+_portable_runtime_paths = get_portable_runtime_paths()
+STATS_DIR = str(
+    _portable_runtime_paths.data_path("state", "task_stats")
+    if _portable_runtime_paths is not None
+    else "task_stats"
+)
 os.makedirs(STATS_DIR, exist_ok=True)
 
 def get_task_stats_file(task_name):
@@ -676,7 +682,8 @@ def delete_task_stats_file(task_name):
 def record_risk_control(account_name: Optional[str], reason: str, task_name: Optional[str] = None) -> None:
     if not account_name:
         return
-    state_file_path = os.path.join("state", f"{account_name}.json")
+    state_dir = str(_portable_runtime_paths.data_path("state")) if _portable_runtime_paths is not None else "state"
+    state_file_path = os.path.join(state_dir, f"{account_name}.json")
     if not os.path.exists(state_file_path):
         return
     try:
@@ -931,7 +938,12 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
     db_dedup_enabled = bool(owner_id) and STORAGE_BACKEND() == "postgres" and DB_DEDUP_ENABLED()
 
     processed_links = set()
-    output_filename = os.path.join("jsonl", f"{keyword.replace(' ', '_')}_full_data.jsonl")
+    jsonl_dir = (
+        str(_portable_runtime_paths.data_path("results", "jsonl"))
+        if _portable_runtime_paths is not None
+        else "jsonl"
+    )
+    output_filename = os.path.join(jsonl_dir, f"{keyword.replace(' ', '_')}_full_data.jsonl")
     if db_dedup_enabled:
         print("LOG: 已启用数据库去重主路径，启动阶段跳过jsonl历史预加载。")
     elif os.path.exists(output_filename):
@@ -963,7 +975,12 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
             '--disable-features=IsolateOrigins,site-per-process'
         ]
 
-        if LOGIN_IS_EDGE():
+        portable_browser = portable_browser_executable()
+        if portable_browser is not None:
+            browser = await p.chromium.launch(
+                headless=RUN_HEADLESS(), executable_path=str(portable_browser), args=launch_args
+            )
+        elif LOGIN_IS_EDGE():
             browser = await p.chromium.launch(headless=RUN_HEADLESS(), channel="msedge", args=launch_args)
         else:
             if RUNNING_IN_DOCKER():
@@ -1072,12 +1089,13 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                     await browser.close()
                     return 0, 0, "NO_ACCOUNT:无可用账号"
         elif bound_account:
-            state_file_path = os.path.join("state", f"{bound_account}.json")
+            state_dir = str(_portable_runtime_paths.data_path("state")) if _portable_runtime_paths is not None else "state"
+            state_file_path = os.path.join(state_dir, f"{bound_account}.json")
             current_account_name = bound_account
             print(f"LOG: 使用绑定账号 '{bound_account}' 的状态文件: {state_file_path}")
         else:
             # 本地模式默认随机选择一个有效账号
-            state_dir = "state"
+            state_dir = str(_portable_runtime_paths.data_path("state")) if _portable_runtime_paths is not None else "state"
             available_accounts = []
             valid_accounts = []
 
@@ -1102,7 +1120,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
             # 优先选择有效账号
             if valid_accounts:
                 selected_account = random.choice(valid_accounts)
-                state_file_path = os.path.join("state", f"{selected_account}.json")
+                state_file_path = os.path.join(state_dir, f"{selected_account}.json")
                 current_account_name = selected_account
                 print(f"LOG: 随机选择有效账号 '{selected_account}': {state_file_path}")
 

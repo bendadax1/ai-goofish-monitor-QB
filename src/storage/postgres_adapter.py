@@ -6,7 +6,7 @@ PostgreSQL Storage Adapter - PostgreSQL 数据库存储适配器
 
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,7 +27,15 @@ from .utils import (
     hash_password, verify_password, hash_token, generate_uuid,
     encrypt_sensitive, decrypt_sensitive
 )
-from src.config import WEB_USERNAME, WEB_PASSWORD
+from src.config import PORTABLE_MODE, WEB_USERNAME, WEB_PASSWORD
+
+
+class ApiConfigRevisionConflict(Exception):
+    """Raised when a user's API config changed after the caller read it."""
+
+    def __init__(self, current_revision: int):
+        super().__init__("API configuration revision conflict")
+        self.current_revision = int(current_revision)
 
 
 class PostgresAdapter(StorageInterface):
@@ -381,6 +389,12 @@ class PostgresAdapter(StorageInterface):
 
     def _ensure_default_super_admin(self, session: DBSession):
         """确保默认登录账户在数据库中具备超级管理员能力。"""
+        if PORTABLE_MODE:
+            # Portable first-admin bootstrap is a separate, authenticated flow.
+            # Never create, elevate, or reactivate an account as a schema side
+            # effect in the normal portable application path.
+            return
+
         default_username = (WEB_USERNAME() or "admin").strip() or "admin"
         default_password = WEB_PASSWORD() or "admin123"
 
@@ -572,6 +586,9 @@ class PostgresAdapter(StorageInterface):
             # 密码加密
             if 'password' in updates:
                 updates['password_hash'] = hash_password(updates.pop('password'))
+            if PORTABLE_MODE and ('password_hash' in updates or updates.get('is_active') is False):
+                # Commit password/deactivation and revocation atomically.
+                session.query(Session).filter(Session.user_id == user_id).delete()
             
             for key, value in updates.items():
                 if hasattr(user, key):
@@ -815,7 +832,7 @@ class PostgresAdapter(StorageInterface):
         with self.get_session() as db_session:
             session = db_session.query(Session).filter(
                 Session.token_hash == token_hash,
-                Session.expires_at > datetime.utcnow()
+                Session.expires_at > (datetime.now(timezone.utc) if PORTABLE_MODE else datetime.utcnow())
             ).first()
             return self._to_dict(session)
     
@@ -1699,6 +1716,118 @@ class PostgresAdapter(StorageInterface):
             return count > 0
     
     # ============== 用户API配置管理 ==============
+
+    _API_CONFIG_REVISION_KEY = "__config_revision"
+
+    @staticmethod
+    def _lock_user_api_config_writes(session: DBSession, user_id: str) -> None:
+        """Serialize API-config changes per user, including first-row creation."""
+        from sqlalchemy import text
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:user_id, 0))"),
+            {"user_id": str(user_id)},
+        )
+
+    @classmethod
+    def _api_config_revision(cls, config: Optional[UserApiConfig]) -> int:
+        extra_config = config.extra_config if config and isinstance(config.extra_config, dict) else {}
+        if cls._API_CONFIG_REVISION_KEY not in extra_config:
+            # Legacy rows predate revisions; reserve zero for a user with no row.
+            return 1 if config is not None else 0
+        try:
+            return max(0, int(extra_config.get(cls._API_CONFIG_REVISION_KEY, 0)))
+        except (TypeError, ValueError):
+            return 1 if config is not None else 0
+
+    def _api_config_dict(self, config: Optional[UserApiConfig], user_id: str) -> Optional[Dict[str, Any]]:
+        if config is None:
+            return None
+        config_dict = self._to_dict(config)
+        extra_config = config_dict.get("extra_config")
+        extra_config = dict(extra_config) if isinstance(extra_config, dict) else {}
+        revision = self._api_config_revision(config)
+        extra_config.pop(self._API_CONFIG_REVISION_KEY, None)
+        config_dict["extra_config"] = extra_config
+        config_dict["config_revision"] = revision
+        if config_dict.get("api_key_encrypted"):
+            try:
+                config_dict["api_key"] = decrypt_sensitive(str(user_id), config_dict.pop("api_key_encrypted"))
+            except Exception:
+                config_dict["api_key"] = ""
+                config_dict["api_key_invalid"] = True
+                config_dict.pop("api_key_encrypted", None)
+        else:
+            config_dict.pop("api_key_encrypted", None)
+            config_dict["api_key"] = ""
+        return config_dict
+
+    def get_default_api_config_with_revision(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Read the user's default API config and its write revision."""
+        with self.get_session() as session:
+            config = session.query(UserApiConfig).filter(
+                UserApiConfig.user_id == user_id,
+                UserApiConfig.is_default == True,
+            ).first()
+            if config is None:
+                config = session.query(UserApiConfig).filter(UserApiConfig.user_id == user_id).first()
+            return self._api_config_dict(config, user_id)
+
+    def update_default_api_config_fields(
+        self,
+        user_id: str,
+        expected_revision: int,
+        expected_config_id: str,
+        field_updates: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Atomically compare the config revision and patch approved fields."""
+        with self.get_session() as session:
+            self._lock_user_api_config_writes(session, user_id)
+            config = session.query(UserApiConfig).filter(
+                UserApiConfig.user_id == user_id,
+                UserApiConfig.is_default == True,
+            ).with_for_update().first()
+            if config is None:
+                config = session.query(UserApiConfig).filter(
+                    UserApiConfig.user_id == user_id,
+                ).with_for_update().first()
+
+            current_revision = self._api_config_revision(config)
+            current_config_id = str(config.id) if config is not None else ""
+            if int(expected_revision) != current_revision or str(expected_config_id or "") != current_config_id:
+                raise ApiConfigRevisionConflict(current_revision)
+            if not field_updates:
+                return self._api_config_dict(config, user_id) or {"config_revision": current_revision}
+
+            if config is None:
+                config = UserApiConfig(
+                    user_id=user_id,
+                    provider="openai",
+                    name="默认AI配置",
+                    is_default=True,
+                    extra_config={},
+                )
+                session.add(config)
+                session.flush()
+
+            extra_config = dict(config.extra_config) if isinstance(config.extra_config, dict) else {}
+            config_revision = current_revision + 1
+            extra_config[self._API_CONFIG_REVISION_KEY] = config_revision
+            for key, value in field_updates.items():
+                if key == "extra_config":
+                    for extra_key, extra_value in value.items():
+                        if extra_value is None:
+                            extra_config.pop(extra_key, None)
+                        else:
+                            extra_config[extra_key] = extra_value
+                elif key == "api_key":
+                    config.api_key_encrypted = encrypt_sensitive(str(user_id), value) if value else None
+                elif key == "remove_api_key" and value:
+                    config.api_key_encrypted = None
+                elif key in {"provider", "name", "api_base_url", "model", "is_default"}:
+                    setattr(config, key, value)
+            config.extra_config = extra_config
+            session.flush()
+            return self._api_config_dict(config, user_id)
     
     def get_user_api_configs(self, user_id: str) -> List[Dict[str, Any]]:
         """获取用户的API配置列表"""
@@ -1721,25 +1850,51 @@ class PostgresAdapter(StorageInterface):
     def save_user_api_config(self, user_id: str, config_data: Dict[str, Any]) -> Dict[str, Any]:
         """保存用户API配置"""
         with self.get_session() as session:
+            self._lock_user_api_config_writes(session, user_id)
+            config_data = dict(config_data or {})
             config_data['user_id'] = user_id
+
+            # The portable settings CAS addresses one user-default config by
+            # identity. Keep that selector unambiguous when portable users
+            # create or promote another API config. Preserve legacy Docker
+            # behavior until its multi-config default policy is changed separately.
+            config_id = config_data.get('id')
+            if PORTABLE_MODE and config_data.get('is_default') is True:
+                defaults = session.query(UserApiConfig).filter(
+                    UserApiConfig.user_id == user_id,
+                    UserApiConfig.is_default == True,
+                )
+                if config_id:
+                    defaults = defaults.filter(UserApiConfig.id != config_id)
+                for previous_default in defaults.with_for_update().all():
+                    previous_default.is_default = False
             
             # 加密API密钥
             if 'api_key' in config_data:
                 config_data['api_key_encrypted'] = encrypt_sensitive(str(user_id), config_data.pop('api_key'))
             
-            config_id = config_data.get('id')
             if config_id:
                 existing = session.query(UserApiConfig).filter(
                     UserApiConfig.id == config_id,
                     UserApiConfig.user_id == user_id
                 ).first()
                 if existing:
+                    extra_config = config_data.get("extra_config")
+                    extra_config = dict(extra_config) if isinstance(extra_config, dict) else (
+                        dict(existing.extra_config) if isinstance(existing.extra_config, dict) else {}
+                    )
+                    extra_config[self._API_CONFIG_REVISION_KEY] = self._api_config_revision(existing) + 1
+                    config_data["extra_config"] = extra_config
                     for key, value in config_data.items():
                         if hasattr(existing, key) and key != 'id':
                             setattr(existing, key, value)
                     session.flush()
                     return self._to_dict(existing)
             
+            extra_config = config_data.get("extra_config")
+            extra_config = dict(extra_config) if isinstance(extra_config, dict) else {}
+            extra_config[self._API_CONFIG_REVISION_KEY] = 1
+            config_data["extra_config"] = extra_config
             config = UserApiConfig(**{k: v for k, v in config_data.items() if k != 'id'})
             session.add(config)
             session.flush()
@@ -1756,6 +1911,7 @@ class PostgresAdapter(StorageInterface):
     def delete_user_api_config(self, config_id: str, user_id: str) -> bool:
         """删除用户API配置"""
         with self.get_session() as session:
+            self._lock_user_api_config_writes(session, user_id)
             count = session.query(UserApiConfig).filter(
                 UserApiConfig.id == config_id,
                 UserApiConfig.user_id == user_id

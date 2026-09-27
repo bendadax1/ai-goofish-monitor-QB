@@ -11,6 +11,18 @@ from typing import Optional
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from src.config import PORTABLE_MODE
+
+
+_LEGACY_DEFAULT_MASTER_KEY = 'default-encryption-key-change-in-production'
+_PORTABLE_REJECTED_MASTER_KEYS = frozenset({
+    "changeme",
+    "change-me",
+    "change-this-in-production",
+    "default-encryption-key-change-in-production",
+    "your-encryption-master-key",
+    "replace-me",
+})
 
 
 def get_master_key() -> bytes:
@@ -23,7 +35,11 @@ def get_master_key() -> bytes:
     Returns:
         bytes: 32字节的密钥
     """
-    key = os.getenv('ENCRYPTION_MASTER_KEY', 'default-encryption-key-change-in-production')
+    key = os.getenv('ENCRYPTION_MASTER_KEY', _LEGACY_DEFAULT_MASTER_KEY)
+    if PORTABLE_MODE and (not key.strip() or key.strip().lower() in _PORTABLE_REJECTED_MASTER_KEYS):
+        raise RuntimeError(
+            "便携版必须由受控进程环境提供非默认 ENCRYPTION_MASTER_KEY"
+        )
     # 使用SHA256确保密钥长度
     return hashlib.sha256(key.encode()).digest()
 

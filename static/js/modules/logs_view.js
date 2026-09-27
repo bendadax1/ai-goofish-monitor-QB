@@ -1,4 +1,4 @@
-﻿﻿// 日志视图 - 增强版
+// 日志视图 - 增强版
 async function initializeLogsView() {
     const logContainer = document.getElementById('log-content-container');
     const refreshBtn = document.getElementById('refresh-logs-btn');

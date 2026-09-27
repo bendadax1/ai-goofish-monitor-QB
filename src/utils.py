@@ -12,6 +12,7 @@ from urllib.parse import quote
 from openai import APIStatusError
 from requests.exceptions import HTTPError
 from src.logging_config import get_logger
+from src.portable.app_paths import get_portable_runtime_paths
 
 logger = get_logger(__name__, service="system")
 
@@ -199,7 +200,8 @@ async def save_to_jsonl(data_record: dict, keyword: str, return_meta: bool = Fal
                 extra={"event": "save_result_fallback", "owner_id": owner_id, "task_name": task_name},
             )
 
-    output_dir = "jsonl"
+    portable_paths = get_portable_runtime_paths()
+    output_dir = str(portable_paths.data_path("results", "jsonl")) if portable_paths is not None else "jsonl"
     os.makedirs(output_dir, exist_ok=True)
     filename = os.path.join(output_dir, f"{keyword.replace(' ', '_')}_full_data.jsonl")
     try:
@@ -245,8 +247,10 @@ def format_registration_days(total_days: int) -> str:
 
 def write_log(message):
     """将日志消息写入到 fetcher.log 文件中"""
-    os.makedirs("logs", exist_ok=True)
-    log_file_path = os.path.join("logs", "fetcher.log")
+    portable_paths = get_portable_runtime_paths()
+    log_dir = str(portable_paths.data_path("logs")) if portable_paths is not None else "logs"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir, "fetcher.log")
     try:
         with open(log_file_path, 'a', encoding='utf-8') as f:
             f.write(message + '\n')

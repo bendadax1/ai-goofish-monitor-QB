@@ -1,4 +1,4 @@
-﻿﻿// 导航与路由
+// 导航与路由
 var navMainContent = null;
 var navLinks = [];
 var navigationInitialized = false;

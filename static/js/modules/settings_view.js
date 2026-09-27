@@ -1,4 +1,4 @@
-﻿﻿// 设置视图
+// 设置视图
 async function initializeSettingsView() {
 
     const settingsSection = document.querySelector('#settings-section');
@@ -114,6 +114,17 @@ async function initializeSettingsView() {
             <button type="submit" class="control-button primary-btn">保存通用配置</button>
         </form>
     `;
+        if (genericSettings.PORTABLE_MODE) {
+            const writable = new Set(genericSettings.WRITABLE_KEYS || []);
+            genericSettingsContainer.querySelectorAll('input[name]').forEach(input => {
+                if (!writable.has(input.name)) {
+                    input.disabled = true;
+                    input.closest('.form-group')?.setAttribute('hidden', '');
+                }
+            });
+            genericSettingsContainer.querySelector('.form-hint').textContent =
+                '便携版使用内置浏览器；端口在 Launcher 设置，账号在用户管理中修改。此处偏好对新任务生效。';
+        }
     } catch (error) {
         console.error("无法加载通用配置:", error);
         const genericSettingsContainer = document.getElementById('generic-settings-container');
@@ -140,13 +151,16 @@ async function initializeSettingsView() {
 
 
         try {
-            await fetch('/api/settings/generic', {
+            const response = await fetch('/api/settings/generic', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(settings),
+                body: JSON.stringify(cachedGenericSettings?.PORTABLE_MODE
+                    ? { RUN_HEADLESS: settings.RUN_HEADLESS } : settings),
             });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
         } catch (error) {
             console.error('自动保存失败:', error);
+            Notification.error('通用偏好未保存，请重试或使用保存按钮。');
         }
     }
 
@@ -180,7 +194,8 @@ async function initializeSettingsView() {
                 const response = await fetch('/api/settings/generic', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(settings),
+                    body: JSON.stringify(cachedGenericSettings?.PORTABLE_MODE
+                        ? { RUN_HEADLESS: settings.RUN_HEADLESS } : settings),
                 });
 
                 if (response.ok) {
@@ -314,7 +329,7 @@ async function initializeSettingsView() {
     aiPanel.appendChild(aiContainer);
 
     const aiSettingsContainer = document.getElementById('ai-settings-container');
-    const aiSettings = await fetchAISettings();
+    let aiSettings = await fetchAISettings();
     if (aiSettings !== null) {
         let genericSettingsForAI = cachedGenericSettings;
         if (!genericSettingsForAI) {
@@ -377,7 +392,7 @@ async function initializeSettingsView() {
     proxyPanel.appendChild(proxyContainer);
 
     const proxySettingsContainer = document.getElementById('proxy-settings-container');
-    const proxySettings = await fetchProxySettings();
+    let proxySettings = await fetchProxySettings();
     if (proxySettings !== null) {
         proxySettingsContainer.innerHTML = renderProxySettings(proxySettings);
     } else {
@@ -402,7 +417,27 @@ async function initializeSettingsView() {
             PROXY_DINGTALK_ENABLED: formData.get('PROXY_DINGTALK_ENABLED') === 'on',
         };
 
-        return await updateProxySettings(settings);
+        if (isPortableRevision(proxySettings)) {
+            settings.config_revision = Number(proxySettings.config_revision);
+            settings.config_id = proxySettings.config_id;
+        }
+
+        const result = await updateProxySettings(settings);
+        if (result?.conflict) {
+            if (isPortableRevision(proxySettings)) {
+                await handlePortableSettingsConflict(result);
+            } else {
+                Notification.error(result.message || '代理配置已被其他页面修改，请重新读取后再保存。');
+            }
+            return null;
+        }
+        if (result && isPortableRevision(proxySettings)) {
+            const latest = await refreshPortableSettings(['proxy']);
+            if (!latest.aiSettings || !latest.proxySettings) {
+                Notification.error('代理配置已保存，但未能完整刷新配置版本。请刷新页面后再继续保存。');
+            }
+        }
+        return result;
     }
 
     const proxyForm = document.getElementById('proxy-settings-form');
@@ -487,11 +522,50 @@ async function initializeSettingsView() {
             }
         });
     };
+    const isPortableRevision = (settings) => Boolean(
+        settings
+        && settings.config_source === 'user_default_api_config'
+        && Number.isInteger(Number(settings.config_revision))
+        && typeof settings.config_id === 'string'
+    );
+    const refreshPortableSettings = async (applySections = []) => {
+        const [latestAISettings, latestProxySettings] = await Promise.all([
+            fetchAISettings(),
+            fetchProxySettings(),
+        ]);
+        if (latestAISettings && applySections.includes('ai')) {
+            aiSettings = latestAISettings;
+            applyAiSettingsToForm(latestAISettings);
+        }
+        if (latestProxySettings && applySections.includes('proxy')) {
+            proxySettings = latestProxySettings;
+            applyProxySettingsToForm(latestProxySettings);
+        }
+        return { aiSettings: latestAISettings, proxySettings: latestProxySettings };
+    };
+    const handlePortableSettingsConflict = async (result) => {
+        const latest = await refreshPortableSettings(['ai', 'proxy']);
+        if (latest.aiSettings && latest.proxySettings) {
+            Notification.error(`${result.message || '配置已被其他页面修改。'} 已重新读取服务器配置；本次未保存的修改已从表单移除，请核对当前值后再编辑和保存。`);
+        } else {
+            Notification.error(`${result.message || '配置已被其他页面修改。'} 无法完整读取最新配置，请刷新页面后核对，再重新编辑和保存。`);
+        }
+    };
     const aiGenericToggleKeys = new Set([
         'ENABLE_THINKING',
         'ENABLE_RESPONSE_FORMAT',
         'AI_VISION_ENABLED'
     ]);
+
+    if (isPortableRevision(aiSettings)) {
+        aiGenericToggleKeys.forEach(key => {
+            const input = aiForm?.querySelector(`input[name="${key}"]`);
+            if (input) {
+                input.disabled = true;
+                input.title = '便携版暂不支持在此修改全局 AI 开关';
+            }
+        });
+    }
 
     const buildAiGenericToggleSettings = (formData) => ({
         ENABLE_THINKING: formData.get('ENABLE_THINKING') === 'on',
@@ -588,6 +662,12 @@ async function initializeSettingsView() {
                 settings[convertedKey] = value || '';
             }
 
+            const portableSettings = isPortableRevision(aiSettings);
+            if (portableSettings) {
+                settings.config_revision = Number(aiSettings.config_revision);
+                settings.config_id = aiSettings.config_id;
+            }
+
             // tokens上限仅在填写时做数值校验，避免NaN写入配置
             const tokensLimitInput = (formData.get('AI_MAX_TOKENS_LIMIT') || '').toString().trim();
             if (tokensLimitInput !== '') {
@@ -602,13 +682,26 @@ async function initializeSettingsView() {
             saveBtn.textContent = '保存中...';
 
             const result = await updateAISettings(settings);
-            if (result) {
+            if (result?.conflict) {
+                if (portableSettings) {
+                    await handlePortableSettingsConflict(result);
+                } else {
+                    Notification.error(result.message || 'AI配置已被其他页面修改，请重新读取后再保存。');
+                }
+            } else if (result) {
                 Notification.success(result.message || "AI设置已保存！");
-                await updateAiGenericToggleSettings(genericToggleSettings);
-                await checkAIHealth(
-                    { check_vision: genericToggleSettings.AI_VISION_ENABLED === true },
-                    { silent: true }
-                );
+                if (!portableSettings) await updateAiGenericToggleSettings(genericToggleSettings);
+                if (!portableSettings) {
+                    await checkAIHealth(
+                        { check_vision: genericToggleSettings.AI_VISION_ENABLED === true },
+                        { silent: true }
+                    );
+                } else {
+                    const latest = await refreshPortableSettings(['ai']);
+                    if (!latest.aiSettings || !latest.proxySettings) {
+                        Notification.error('AI配置已保存，但未能完整刷新配置版本。请刷新页面后再继续保存。');
+                    }
+                }
 
                 // 刷新系统状态检查
                 await refreshSystemStatusPanel();
@@ -645,10 +738,48 @@ async function initializeSettingsView() {
                     settings.PROXY_AI_ENABLED = proxyFormData.get('PROXY_AI_ENABLED') === 'on';
                 }
 
+                const results = [];
+                const portableSettings = isPortableRevision(aiSettings);
+                if (portableSettings) {
+                    if (!aiForm.reportValidity()) return;
+                    const target = String(settings.OPENAI_BASE_URL || '').trim() || '未填写 Base URL';
+                    const model = String(settings.OPENAI_MODEL_NAME || '').trim() || '未填写模型名称';
+                    const confirmed = window.confirm(
+                        `即将向以下 AI 服务发送真实测试请求：\n目标：${target}\n模型：${model}\n\n该请求可能产生费用，服务商可能会处理请求内容。测试使用当前表单草稿，不会自动保存配置，也不会自动重试。确认继续吗？`
+                    );
+                    if (!confirmed) return;
+
+                    if (typeof window.crypto?.randomUUID !== 'function') {
+                        Notification.error('当前浏览器不支持安全生成测试请求编号，未发送请求。请使用支持 crypto.randomUUID 的浏览器后重试。');
+                        return;
+                    }
+                    const requestId = window.crypto.randomUUID();
+
+                    const originalText = testBtn.textContent;
+                    testBtn.disabled = true;
+                    testBtn.textContent = '测试中...';
+                    try {
+                        const testResult = await testAISettings(settings, {
+                            silent: true,
+                            request_id: requestId,
+                            confirmed: true,
+                        });
+                        if (testResult) {
+                            results.push(testResult.message || (testResult.success ? '测试请求成功。' : '测试请求未成功。'));
+                        } else {
+                            results.push('AI测试请求失败：接口无响应。');
+                        }
+                    } finally {
+                        testBtn.disabled = false;
+                        testBtn.textContent = originalText;
+                    }
+                    Notification.infoMultiline(results.join('\n'));
+                    return;
+                }
+
                 const originalText = testBtn.textContent;
                 testBtn.disabled = true;
                 testBtn.textContent = '测试中...';
-                const results = [];
 
                 try {
                     const saveResult = await updateAISettings(settings);

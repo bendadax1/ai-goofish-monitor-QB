@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import os
 import re
@@ -14,7 +14,13 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.logging_config import get_logger
+from src.config import CONFIG_FILE
 from src.notifier import notifier
+from src.portable.app_paths import (
+    get_portable_runtime_paths,
+    portable_worker_command,
+    portable_worker_environment,
+)
 from src.prompt_utils import CriteriaGenerationTimeoutError, generate_criteria
 from src.scraper import delete_task_stats_file, get_task_stats
 from src.storage import get_storage
@@ -27,8 +33,12 @@ from src.web.scheduler import reload_scheduler_jobs
 router = APIRouter()
 logger = get_logger(__name__, service="web")
 
-CONFIG_FILE = "config.json"
-RUNTIME_TASK_CONFIG_DIR = os.path.join("state", "runtime_task_configs")
+_portable_runtime_paths = get_portable_runtime_paths()
+RUNTIME_TASK_CONFIG_DIR = str(
+    _portable_runtime_paths.data_path("state", "runtime_task_configs")
+    if _portable_runtime_paths is not None
+    else os.path.join("state", "runtime_task_configs")
+)
 
 BOOL_FIELDS = [
     "free_shipping",
@@ -348,10 +358,18 @@ async def start_task_process(
     runtime_config_path = None
     log_file_handle = None
     try:
-        os.makedirs("logs", exist_ok=True)
-        log_file_handle = open(os.path.join("logs", "fetcher.log"), "a", encoding="utf-8")
+        log_dir = (
+            str(_portable_runtime_paths.data_path("logs"))
+            if _portable_runtime_paths is not None
+            else "logs"
+        )
+        os.makedirs(log_dir, exist_ok=True)
+        log_file_handle = open(os.path.join(log_dir, "fetcher.log"), "a", encoding="utf-8")
 
-        cmd = [sys.executable, "-u", "collector.py", "--task-name", task_name, "--start-reason", "manual"]
+        collector_arguments = ["--task-name", task_name, "--start-reason", "manual"]
+        cmd = portable_worker_command("collector", collector_arguments) or [
+            sys.executable, "-u", "collector.py", *collector_arguments,
+        ]
         child_env = os.environ.copy()
         child_env["PYTHONIOENCODING"] = "utf-8"
         child_env["PYTHONUTF8"] = "1"
@@ -371,6 +389,10 @@ async def start_task_process(
             except Exception:
                 pass
 
+        portable_child_env = portable_worker_environment(child_env)
+        if portable_child_env is not None:
+            child_env = portable_child_env
+
         preexec_fn = os.setsid if sys.platform != "win32" else None
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -378,6 +400,7 @@ async def start_task_process(
             stderr=log_file_handle,
             preexec_fn=preexec_fn,
             env=child_env,
+            cwd=str(_portable_runtime_paths.data_root) if _portable_runtime_paths is not None else None,
         )
 
         fetcher_processes[process_key] = process
@@ -409,7 +432,10 @@ async def start_task_process(
                     except Exception:
                         pass
 
-        asyncio.create_task(_monitor_process())
+        monitor_task = asyncio.create_task(_monitor_process())
+        if _portable_runtime_paths is not None:
+            from src.portable.web_runtime import register_portable_background_task
+            register_portable_background_task(monitor_task)
     except HTTPException:
         raise
     except Exception as exc:
@@ -454,8 +480,15 @@ async def stop_task_process(
     process = fetcher_processes.get(process_key)
 
     if not process or process.returncode is not None:
-        if process_pid:
+        if process_pid and _portable_runtime_paths is None:
             _terminate_pid(int(process_pid))
+        elif process_pid:
+            # A persisted PID is not proof of ownership after a restart. Only
+            # this process's live child handle may authorize a portable stop.
+            logger.warning(
+                "便携任务没有受管活动句柄，仅清理遗留状态，不终止旧 PID",
+                extra={"event": "portable_stale_task_pid", "task_name": resolved_task_name},
+            )
         await update_task_running_status(
             process_key if owner_id else task_id,
             False,

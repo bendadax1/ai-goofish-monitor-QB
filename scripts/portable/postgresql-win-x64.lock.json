@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "component": "postgresql",
+  "version": "17.11",
+  "package_revision": 3,
+  "platform": "windows-x64",
+  "file_name": "postgresql-17.11-3-windows-x64-binaries.zip",
+  "url": "https://get.enterprisedb.com/postgresql/postgresql-17.11-3-windows-x64-binaries.zip",
+  "source_page": "https://www.postgresql.org/download/windows/",
+  "publisher_page": "https://www.enterprisedb.com/download-postgresql-binaries",
+  "archive_bytes": 341325378,
+  "sha256": "4b8db0930c38f6ef845db919551dedda3b6b845aeb0927b3d79a6e8e9e4537cf",
+  "verification": "official_https_local_sha256",
+  "signature_verified": false,
+  "selected_archive_prefixes": [
+    "pgsql/bin/",
+    "pgsql/lib/",
+    "pgsql/share/"
+  ],
+  "selected_archive_files": [
+    "pgsql/server_license.txt",
+    "pgsql/commandlinetools_3rd_party_licenses.txt"
+  ],
+  "selected_entries": 1593,
+  "selected_uncompressed_bytes": 141101130,
+  "runtime_files": 1565,
+  "runtime_bytes": 141101130
+}

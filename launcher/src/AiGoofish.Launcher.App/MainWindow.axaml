@@ -1,0 +1,585 @@
+<Window
+    x:Class="AiGoofish.Launcher.App.MainWindow"
+    x:DataType="local:MainWindowViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AiGoofish.Launcher.App"
+    Title="闲鱼监控与 AI 推荐 · Launcher"
+    Width="1120" Height="760" MinWidth="920" MinHeight="640"
+    Background="#F7F8FA" Foreground="#202733"
+    FontFamily="Microsoft YaHei UI, Microsoft YaHei, Segoe UI" FontSize="14">
+  <Window.Resources>
+    <SolidColorBrush x:Key="LauncherSurfaceBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="LauncherBorderBrush" Color="#E0E4E9" />
+    <SolidColorBrush x:Key="LauncherTextBrush" Color="#202733" />
+    <SolidColorBrush x:Key="LauncherMutedBrush" Color="#657181" />
+    <SolidColorBrush x:Key="LauncherPrimaryBrush" Color="#0875C1" />
+    <SolidColorBrush x:Key="LauncherPrimaryTintBrush" Color="#EAF4FC" />
+    <StreamGeometry x:Key="playIcon">M 6,3 L 21,12 L 6,21 Z</StreamGeometry>
+    <StreamGeometry x:Key="slidersIcon">M 3,6 H 21 M 3,12 H 21 M 3,18 H 21 M 8,3 V 9 M 16,9 V 15 M 10,15 V 21</StreamGeometry>
+    <StreamGeometry x:Key="aiIcon">M 5,5 H 19 V 19 H 5 Z M 9,1 V 5 M 15,1 V 5 M 9,19 V 23 M 15,19 V 23 M 1,9 H 5 M 1,15 H 5 M 19,9 H 23 M 19,15 H 23 M 9,9 H 15 V 15 H 9 Z</StreamGeometry>
+    <StreamGeometry x:Key="shieldIcon">M 12,2 L 21,6 V 12 C 21,17 17,21 12,23 C 7,21 3,17 3,12 V 6 Z M 12,7 V 15 M 8,11 H 16</StreamGeometry>
+    <StreamGeometry x:Key="logsIcon">M 3,3 H 21 V 21 H 3 Z M 7,8 H 17 M 7,12 H 17 M 7,16 H 14</StreamGeometry>
+    <StreamGeometry x:Key="folderIcon">M 2,6 H 9 L 12,9 H 22 V 20 H 2 Z</StreamGeometry>
+    <StreamGeometry x:Key="arrowIcon">M 9,5 L 16,12 L 9,19</StreamGeometry>
+  </Window.Resources>
+  <Window.Styles>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{StaticResource LauncherSurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource LauncherBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Padding" Value="20" />
+    </Style>
+    <Style Selector="TextBlock.section-title">
+      <Setter Property="FontSize" Value="18" />
+      <Setter Property="FontWeight" Value="Medium" />
+      <Setter Property="Foreground" Value="{StaticResource LauncherTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="{StaticResource LauncherMutedBrush}" />
+    </Style>
+    <Style Selector="TextBlock.validation-error">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="#A61B1B" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="MinHeight" Value="44" />
+      <Setter Property="Padding" Value="24,10" />
+      <Setter Property="FontSize" Value="15" />
+      <Setter Property="FontWeight" Value="Medium" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+      <Setter Property="Background" Value="{StaticResource LauncherPrimaryBrush}" />
+      <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="Button.secondary">
+      <Setter Property="MinHeight" Value="40" />
+      <Setter Property="Padding" Value="16,8" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="#3D4C5F" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#D8DFE7" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="7" />
+    </Style>
+    <Style Selector="Button.shortcut">
+      <Setter Property="MinHeight" Value="72" />
+      <Setter Property="Padding" Value="16,12" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="{StaticResource LauncherBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="Button.secondary:pointerover, Button.shortcut:pointerover">
+      <Setter Property="Background" Value="#F1F7FC" />
+      <Setter Property="BorderBrush" Value="#9BBBD5" />
+    </Style>
+    <Style Selector="Button.nav">
+      <Setter Property="Height" Value="78" />
+      <Setter Property="Padding" Value="8" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#657181" />
+      <Setter Property="BorderThickness" Value="3,0,0,0" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="7" />
+    </Style>
+    <Style Selector="Button.nav:pointerover">
+      <Setter Property="Background" Value="#EEF2F6" />
+    </Style>
+    <Style Selector="Button.nav.selected">
+      <Setter Property="Background" Value="#EAF4FC" />
+      <Setter Property="Foreground" Value="#086DB4" />
+      <Setter Property="BorderBrush" Value="#0875C1" />
+    </Style>
+    <Style Selector="Path.nav-icon, Path.line-icon">
+      <Setter Property="Width" Value="24" />
+      <Setter Property="Height" Value="24" />
+      <Setter Property="Stretch" Value="Uniform" />
+      <Setter Property="Stroke" Value="#5A697B" />
+      <Setter Property="StrokeThickness" Value="1.6" />
+      <Setter Property="StrokeLineCap" Value="Round" />
+      <Setter Property="HorizontalAlignment" Value="Center" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.nav.selected Path.nav-icon">
+      <Setter Property="Stroke" Value="#0875C1" />
+    </Style>
+    <Style Selector="WrapPanel Button">
+      <Setter Property="Margin" Value="0,0,8,8" />
+    </Style>
+    <Style Selector="Button.danger">
+      <Setter Property="MinHeight" Value="44" />
+      <Setter Property="Padding" Value="20,10" />
+      <Setter Property="Foreground" Value="#AC3636" />
+      <Setter Property="Background" Value="#FFF4F4" />
+      <Setter Property="BorderBrush" Value="#EDD0D0" />
+      <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="Button:focus-visible">
+      <Setter Property="BorderThickness" Value="2" />
+      <Setter Property="BorderBrush" Value="#0875C1" />
+    </Style>
+  </Window.Styles>
+  <Grid ColumnDefinitions="106,*">
+    <Border Background="#F2F4F7" BorderBrush="#E4E8ED" BorderThickness="0,0,1,0">
+      <Grid RowDefinitions="Auto,*,Auto" Margin="7,20,7,16">
+        <StackPanel Spacing="7" HorizontalAlignment="Center">
+          <Image Source="avares://AiGoofish.Launcher.App/Assets/launcher-tray.png" Width="32" Height="32" />
+          <TextBlock Text="闲鱼监控" FontSize="13" Foreground="#384758" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Margin="0,30,0,0" Spacing="8">
+
+          <Button x:Name="OverviewNavigationButton" Classes="nav" Classes.selected="{Binding IsOverviewPage}" Tag="Overview" Click="OnNavigationClick" AutomationProperties.Name="一键启动">
+            <StackPanel Spacing="9" HorizontalAlignment="Center">
+              <Path Classes="nav-icon" Data="{StaticResource playIcon}" />
+              <TextBlock Text="一键启动" FontSize="13" HorizontalAlignment="Center" />
+            </StackPanel>
+          </Button>
+
+          <Button x:Name="AiNavigationButton" Classes="nav" Classes.selected="{Binding IsAiPage}" Tag="Ai" Click="OnNavigationClick" AutomationProperties.Name="AI 连接">
+            <StackPanel Spacing="9" HorizontalAlignment="Center">
+              <Path Classes="nav-icon" Data="{StaticResource aiIcon}" />
+              <TextBlock Text="AI 连接" FontSize="13" HorizontalAlignment="Center" />
+            </StackPanel>
+          </Button>
+
+          <Button x:Name="DiagnosticsNavigationButton" Classes="nav" Classes.selected="{Binding IsDiagnosticsPage}" Tag="Diagnostics" Click="OnNavigationClick" AutomationProperties.Name="诊断备份">
+            <StackPanel Spacing="9" HorizontalAlignment="Center">
+              <Path Classes="nav-icon" Data="{StaticResource shieldIcon}" />
+              <TextBlock Text="诊断备份" FontSize="13" HorizontalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+        <StackPanel Grid.Row="2" Spacing="8">
+
+          <Button x:Name="LogsNavigationButton" Classes="nav" Classes.selected="{Binding IsLogsPage}" Tag="Logs" Click="OnNavigationClick" AutomationProperties.Name="控制台">
+            <StackPanel Spacing="9" HorizontalAlignment="Center">
+              <Path Classes="nav-icon" Data="{StaticResource logsIcon}" />
+              <TextBlock Text="控制台" FontSize="13" HorizontalAlignment="Center" />
+            </StackPanel>
+          </Button>
+
+          <Button x:Name="SettingsNavigationButton" Classes="nav" Classes.selected="{Binding IsSettingsPage}" Tag="Settings" Click="OnNavigationClick" AutomationProperties.Name="设置">
+            <StackPanel Spacing="9" HorizontalAlignment="Center">
+              <Path Classes="nav-icon" Data="{StaticResource slidersIcon}" />
+              <TextBlock Text="设置" FontSize="13" HorizontalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+    <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto">
+      <Border Background="#FFFFFF" BorderBrush="#E5E9EF" BorderThickness="0,0,0,1" Padding="28,15">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Text="{Binding CurrentPageTitle}" FontSize="20" FontWeight="Medium" Foreground="{StaticResource LauncherTextBrush}" />
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+            <TextBlock Text="Windows x64" FontSize="12" Foreground="#657181" VerticalAlignment="Center" />
+            <Border Background="#F1F5F9" CornerRadius="5" Padding="9,4">
+              <TextBlock Text="{Binding ModeBadge}" FontSize="11" Foreground="#516579" />
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Border>
+      <Grid Grid.Row="1" Margin="26,20,26,18">
+        <ScrollViewer IsVisible="{Binding IsOverviewPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="16">
+            <Border Height="144" CornerRadius="10" ClipToBounds="True" Background="#0B263D">
+              <Grid>
+                <Image Source="avares://AiGoofish.Launcher.App/Assets/market-banner.png" Stretch="UniformToFill" />
+                <StackPanel Margin="28,22" Spacing="8" VerticalAlignment="Center">
+                  <TextBlock Text="闲鱼监控 · AI 推荐" FontSize="30" FontWeight="Medium" Foreground="#FFFFFF" />
+                  <TextBlock Text="让值得关注的好物，及时出现在眼前" FontSize="14" Foreground="#E5EFF7" />
+                </StackPanel>
+              </Grid>
+            </Border>
+            <Border Classes="card" Padding="18,14">
+              <StackPanel Spacing="12">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="14">
+                  <StackPanel Spacing="5">
+                    <StackPanel Orientation="Horizontal" Spacing="9">
+                      <Ellipse Width="9" Height="9" Fill="{Binding StatusAccentBrush}" VerticalAlignment="Center" />
+                      <TextBlock Text="{Binding ServiceState}" FontSize="19" FontWeight="Medium" Foreground="#243449" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding PhaseMessage}" Classes="muted" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding PhaseMessage}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Button Classes="secondary" Content="查看详情" Tag="Diagnostics" Click="OnNavigationClick" />
+                    <Button Classes="secondary" Content="刷新" Click="OnRefreshClick" />
+                  </StackPanel>
+                </Grid>
+                <Border Height="1" Background="#E9EDF2" />
+                <ItemsControl ItemsSource="{Binding Components}">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="3" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:ComponentStatusRow">
+                      <StackPanel Margin="0,0,12,0" Spacing="4">
+                        <TextBlock Text="{Binding DisplayName}" FontSize="13" Foreground="#3A4B5E" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Status}" FontSize="12" Foreground="#657181" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Status}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+            <Border IsVisible="{Binding SetupRequired}" Background="#FFF7E2" BorderBrush="#EBD398" BorderThickness="1" CornerRadius="8" Padding="14">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="14">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="完成首次设置" FontSize="15" Foreground="#715821" />
+                  <TextBlock Text="{Binding SetupHelp}" FontSize="13" Foreground="#715821" TextWrapping="Wrap" />
+                </StackPanel>
+                <Button x:Name="CopySetupTokenButton" Grid.Column="1" Classes="secondary" Content="复制一次性口令" IsEnabled="{Binding CanCopySetupToken}" Click="OnCopySetupTokenClick" TabIndex="1" />
+              </Grid>
+            </Border>
+            <Grid ColumnDefinitions="2*,*" ColumnSpacing="18">
+              <StackPanel Spacing="12">
+                <TextBlock Text="快捷入口" Classes="section-title" />
+                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="10">
+
+                  <Button x:Name="DataDirectoryShortcutButton" Classes="shortcut" Click="OnOpenDataClick" AutomationProperties.Name="数据目录">
+                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
+                      <Path Classes="line-icon" Data="{StaticResource folderIcon}" />
+                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                        <TextBlock Text="数据目录" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
+                        <TextBlock Text="打开本机数据位置" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
+                      </StackPanel>
+                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
+                    </Grid>
+                  </Button>
+
+                  <Button x:Name="LogsDirectoryShortcutButton" Classes="shortcut" Grid.Column="1" Click="OnOpenLogsClick" AutomationProperties.Name="日志目录">
+                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
+                      <Path Classes="line-icon" Data="{StaticResource folderIcon}" />
+                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                        <TextBlock Text="日志目录" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
+                        <TextBlock Text="查看本机日志文件" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
+                      </StackPanel>
+                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
+                    </Grid>
+                  </Button>
+
+                  <Button x:Name="LogPageShortcutButton" Classes="shortcut" Grid.Row="1" Tag="Logs" Click="OnNavigationClick" AutomationProperties.Name="运行日志">
+                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
+                      <Path Classes="line-icon" Data="{StaticResource logsIcon}" />
+                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                        <TextBlock Text="运行日志" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
+                        <TextBlock Text="查看启动与运行记录" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
+                      </StackPanel>
+                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
+                    </Grid>
+                  </Button>
+
+                  <Button x:Name="DiagnosticsShortcutButton" Classes="shortcut" Grid.Row="1" Grid.Column="1" Tag="Diagnostics" Click="OnNavigationClick" AutomationProperties.Name="诊断与备份">
+                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
+                      <Path Classes="line-icon" Data="{StaticResource shieldIcon}" />
+                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                        <TextBlock Text="诊断与备份" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
+                        <TextBlock Text="检查状态 · 管理备份" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
+                      </StackPanel>
+                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
+                    </Grid>
+                  </Button>
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="12">
+                <TextBlock Text="账号与 AI" Classes="section-title" />
+                <Border Classes="card" Padding="16" MinHeight="154">
+                  <StackPanel Spacing="9">
+                    <TextBlock Text="{Binding BusinessConnection.Status}" Classes="muted" TextWrapping="Wrap" />
+                    <StackPanel IsVisible="{Binding BusinessConnection.IsConfigurationVisible}" Spacing="4">
+                      <TextBlock Text="{Binding BusinessConnection.AccountSummary}" FontSize="13" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding BusinessConnection.HealthCategoryText}" Classes="muted" />
+                    </StackPanel>
+                    <Button Classes="secondary" Content="管理 AI 连接  ›" Tag="Ai" Click="OnNavigationClick" HorizontalAlignment="Left" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </ScrollViewer>
+        <ScrollViewer IsVisible="{Binding IsSettingsPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="14">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+              <TextBlock Classes="section-title" Text="启动偏好" FontSize="20" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Classes="secondary" Content="Web 系统设置  ↗" Click="OnAdvancedClick" TabIndex="24" />
+            </Grid>
+
+          <Border Classes="card">
+            <StackPanel Spacing="14">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="20">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="服务就绪后打开管理页" FontSize="15" FontWeight="SemiBold" />
+                  <TextBlock Classes="muted" Text="服务确认 Ready 后打开管理页或首次设置页。默认开启。" TextWrapping="Wrap" />
+                </StackPanel>
+                <ToggleSwitch x:Name="OpenManagementPagePreferenceCheckBox" Grid.Column="1" OnContent="" OffContent="" MinWidth="48"
+                          IsChecked="{Binding OpenManagementPageOnReady, Mode=TwoWay}"
+                          IsEnabled="{Binding CanEditLauncherPreferences}"
+                          VerticalAlignment="Center" AutomationProperties.Name="服务就绪后打开管理页" />
+              </Grid>
+              <Border Background="#E9EDF2" Height="1" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="20">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="打开 Launcher 时启动服务" FontSize="15" FontWeight="SemiBold" />
+                  <TextBlock Classes="muted" Text="仅恢复身份已核验且明确停止的既有实例。默认关闭；不会设置 Windows 开机自启。" TextWrapping="Wrap" />
+                </StackPanel>
+                <ToggleSwitch x:Name="AutoStartPreferenceCheckBox" Grid.Column="1" OnContent="" OffContent="" MinWidth="48"
+                          IsChecked="{Binding AutoStartOnLauncherOpen, Mode=TwoWay}"
+                          IsEnabled="{Binding CanEditLauncherPreferences}"
+                          VerticalAlignment="Center" AutomationProperties.Name="打开 Launcher 时启动服务" />
+              </Grid>
+              <TextBlock x:Name="LauncherPreferencesStatusTextBlock" Classes="muted" Text="{Binding LauncherPreferencesStatus}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border x:Name="WebPortSettingsCard" IsVisible="{Binding HasWebPortPanel}" Classes="card">
+            <StackPanel Spacing="9">
+              <TextBlock Classes="section-title" Text="本机 Web 端口" />
+              <CheckBox x:Name="AutomaticWebPortCheckBox" Content="自动选择端口（取消勾选使用固定端口）" IsChecked="{Binding AutomaticWebPort, Mode=TwoWay}" IsEnabled="{Binding CanStageWebPort}" />
+              <TextBlock Classes="muted" Text="自动模式优先复用上次端口，占用时仅在全部停止后换用空闲端口；启动成功才保存新地址，不停止其他程序。固定模式冲突时只提示。切换模式需点击保存。" TextWrapping="Wrap" />
+              <TextBlock Classes="muted" Text="运行中保存只会暂存候选值；当前访问地址保持不变。停止全部组件后，确认应用会按正常 Host 生命周期启动候选端口；若端口占用或 Ready 检查失败，会尝试恢复旧地址。PostgreSQL 端口不变。" TextWrapping="Wrap" />
+              <Grid ColumnDefinitions="*,*,*" ColumnSpacing="12">
+                <StackPanel Spacing="3">
+                  <TextBlock Classes="muted" Text="当前生效" />
+                  <TextBlock x:Name="EffectiveWebPortTextBlock" Text="{Binding EffectiveWebPortText}" FontFamily="Consolas" FontWeight="SemiBold" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="3">
+                  <TextBlock Classes="muted" Text="待应用" />
+                  <TextBlock x:Name="PendingWebPortTextBlock" Text="{Binding PendingWebPortText}" FontFamily="Consolas" FontWeight="SemiBold" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="3">
+                  <TextBlock Classes="muted" Text="候选 Web 端口" />
+                  <TextBox x:Name="WebPortTextBox" Text="{Binding WebPortInput, Mode=TwoWay}" IsEnabled="{Binding CanEnterWebPort}" PlaceholderText="1024–65535" TabIndex="2" />
+                </StackPanel>
+              </Grid>
+              <TextBlock x:Name="WebPortErrorTextBlock" Classes="validation-error" Text="{Binding WebPortError}" IsVisible="{Binding HasWebPortError}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="StageWebPortButton" Classes="secondary" Content="保存模式 / 暂存端口" IsEnabled="{Binding CanStageWebPort}" Click="OnWebPortStageClick" TabIndex="3" />
+                <Button x:Name="ApplyWebPortButton" Classes="primary" Content="确认应用待处理端口" IsEnabled="{Binding CanApplyWebPort}" Click="OnWebPortApplyClick" TabIndex="4" />
+                <TextBlock x:Name="WebPortStatusTextBlock" Classes="muted" Text="{Binding WebPortStatus}" VerticalAlignment="Center" TextWrapping="Wrap" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          </StackPanel>
+        </ScrollViewer>
+        <ScrollViewer IsVisible="{Binding IsAiPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="16">
+          <Border IsVisible="{Binding !BusinessConnection.IsConfigurationVisible}" Background="#EDF4FA" CornerRadius="10" Padding="24">
+            <StackPanel Spacing="18">
+              <Grid ColumnDefinitions="36,*" ColumnSpacing="14">
+                <Path Classes="line-icon" Data="{StaticResource aiIcon}" Width="30" Height="30" Stroke="#0875C1" />
+                <StackPanel Grid.Column="1" Spacing="5">
+                  <TextBlock Text="连接你的 AI 服务" FontSize="22" Foreground="#25445E" />
+                  <TextBlock Text="完成账号连接后，在这里管理默认模型、密钥和连接状态。" Classes="muted" TextWrapping="Wrap" />
+                </StackPanel>
+              </Grid>
+              <Grid ColumnDefinitions="*,*,*" ColumnSpacing="16">
+                <StackPanel Spacing="5">
+                  <TextBlock Text="01  启动本地服务" FontSize="14" Foreground="#25445E" />
+                  <TextBlock Text="在首页点击一键启动" Classes="muted" TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="5">
+                  <TextBlock Text="02  登录管理页面" FontSize="14" Foreground="#25445E" />
+                  <TextBlock Text="首次使用先创建管理员" Classes="muted" TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="5">
+                  <TextBlock Text="03  连接当前账号" FontSize="14" Foreground="#25445E" />
+                  <TextBlock Text="发起配对，在 Web 中授权" Classes="muted" TextWrapping="Wrap" />
+                </StackPanel>
+              </Grid>
+            </StackPanel>
+          </Border>
+          <Border Classes="card">
+            <StackPanel Spacing="10">
+              <StackPanel Spacing="3">
+                <TextBlock Classes="section-title" Text="当前账号与 AI 连接" />
+                <TextBlock Classes="muted" Text="仅连接当前 Web 账号的默认 AI 配置。Launcher 保存配置不会发送 AI 请求，也不会保存永久用户令牌。" TextWrapping="Wrap" />
+              </StackPanel>
+
+              <TextBlock Classes="muted" Text="{Binding BusinessConnection.Status}" TextWrapping="Wrap" />
+
+              <WrapPanel IsVisible="{Binding BusinessConnection.HostReady}">
+                <Button x:Name="BusinessPairingButton" Classes="secondary" Content="开始账号配对" IsEnabled="{Binding BusinessConnection.CanBeginPairing}" Click="OnBusinessPairingClick" TabIndex="2" />
+                <Button Classes="secondary" Content="取消配对" IsVisible="{Binding BusinessConnection.CanCancelPairing}" IsEnabled="{Binding BusinessConnection.CanCancelPairing}" Click="OnBusinessPairingCancelClick" TabIndex="3" />
+                <Button Classes="secondary" Content="退出当前账号" IsVisible="{Binding BusinessConnection.CanLogout}" IsEnabled="{Binding BusinessConnection.CanLogout}" Click="OnBusinessLogoutClick" TabIndex="4" />
+              </WrapPanel>
+
+              <Border IsVisible="{Binding BusinessConnection.IsPairingCodeVisible}" Padding="12" Background="#F5F7FA" BorderBrush="#D8E0EA" BorderThickness="1" CornerRadius="8">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="请在已登录的 Web 页面手动输入此配对码，并核对账号与设备后明确批准。" Classes="muted" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding BusinessConnection.PairingCode}" FontFamily="Consolas" FontSize="23" FontWeight="Bold" LetterSpacing="2" Foreground="#173F80" />
+                  <TextBlock Text="{Binding BusinessConnection.PairingExpiry}" Classes="muted" />
+                </StackPanel>
+              </Border>
+
+              <StackPanel IsVisible="{Binding BusinessConnection.IsConfigurationVisible}" Spacing="9">
+                <TextBlock Text="{Binding BusinessConnection.AccountSummary}" FontWeight="SemiBold" Foreground="#24334A" TextWrapping="Wrap" />
+                <Button x:Name="BusinessValidationSummaryButton" Classes="secondary" IsVisible="{Binding BusinessConnection.HasValidationErrors}" Click="OnBusinessValidationSummaryClick" TabIndex="5" HorizontalContentAlignment="Left">
+                  <TextBlock Text="{Binding BusinessConnection.ValidationSummary}" TextWrapping="Wrap" />
+                </Button>
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="7">
+                  <StackPanel Grid.Row="0" Grid.Column="0" Spacing="3">
+                    <TextBlock Text="默认 Base URL" Classes="muted" />
+                    <TextBox x:Name="BusinessBaseUrlTextBox" Text="{Binding BusinessConnection.BaseUrl, Mode=TwoWay}" IsEnabled="{Binding BusinessConnection.IsBaseUrlEditable}" PlaceholderText="https://api.example.com/v1" TabIndex="6" />
+                    <TextBlock x:Name="BusinessBaseUrlErrorTextBlock" Classes="validation-error" Text="{Binding BusinessConnection.BaseUrlError}" IsVisible="{Binding BusinessConnection.HasBaseUrlError}" />
+                    <TextBlock IsVisible="{Binding BusinessConnection.IsBaseUrlRedacted}" Text="地址因包含敏感部分而隐藏；请到 Web 系统调整。" FontSize="12" Foreground="#8A5A00" TextWrapping="Wrap" />
+                  </StackPanel>
+                  <StackPanel Grid.Row="0" Grid.Column="1" Spacing="3">
+                    <TextBlock Text="默认模型名称" Classes="muted" />
+                    <TextBox x:Name="BusinessModelNameTextBox" Text="{Binding BusinessConnection.ModelName, Mode=TwoWay}" IsEnabled="{Binding BusinessConnection.IsModelEditable}" PlaceholderText="模型名称" TabIndex="7" />
+                    <TextBlock x:Name="BusinessModelNameErrorTextBlock" Classes="validation-error" Text="{Binding BusinessConnection.ModelNameError}" IsVisible="{Binding BusinessConnection.HasModelNameError}" />
+                  </StackPanel>
+                  <StackPanel Grid.Row="1" Grid.Column="0" Spacing="3">
+                    <TextBlock Text="API Key" Classes="muted" />
+                    <TextBox x:Name="BusinessApiKeyTextBox" Text="{Binding BusinessConnection.ApiKeyDraft, Mode=TwoWay}" PasswordChar="●" IsEnabled="{Binding BusinessConnection.IsApiKeyEditable}" PlaceholderText="留空表示不变；输入新 Key 以替换" TabIndex="8" />
+                    <TextBlock x:Name="BusinessApiKeyErrorTextBlock" Classes="validation-error" Text="{Binding BusinessConnection.ApiKeyError}" IsVisible="{Binding BusinessConnection.HasApiKeyError}" />
+                  </StackPanel>
+                  <StackPanel Grid.Row="1" Grid.Column="1" Spacing="3">
+                    <TextBlock Text="密钥状态" Classes="muted" />
+                    <TextBlock Text="{Binding BusinessConnection.KeyState}" VerticalAlignment="Center" />
+                  </StackPanel>
+                  <StackPanel Grid.Row="2" Grid.Column="0" Spacing="3">
+                    <TextBlock Text="配置来源" Classes="muted" />
+                    <TextBlock Text="{Binding BusinessConnection.ConfigSource}" />
+                  </StackPanel>
+                  <StackPanel Grid.Row="2" Grid.Column="1" Spacing="3">
+                    <TextBlock Text="配置版本" Classes="muted" />
+                    <TextBlock Text="{Binding BusinessConnection.ConfigRevisionText}" />
+                  </StackPanel>
+                  <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Spacing="3">
+                    <TextBlock Text="实际生效状态" Classes="muted" />
+                    <TextBlock Text="{Binding BusinessConnection.EffectiveState}" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Grid>
+                <WrapPanel>
+                  <Button Classes="primary" Content="保存配置" IsEnabled="{Binding BusinessConnection.CanSave}" Click="OnBusinessAiSaveClick" TabIndex="9" />
+                  <Button Classes="secondary" Content="移除 API Key" IsEnabled="{Binding BusinessConnection.CanRemoveApiKey}" Click="OnBusinessApiKeyRemoveClick" TabIndex="10" />
+                  <Button Classes="secondary" Content="重新读取配置" IsEnabled="{Binding BusinessConnection.CanRefreshConfiguration}" Click="OnBusinessAiRefreshClick" TabIndex="11" />
+                  <Button Classes="secondary" Content="Web 高级设置" Click="OnAdvancedClick" TabIndex="12" />
+                </WrapPanel>
+
+                <Border Padding="12" Background="#F5F7FA" BorderBrush="#D8E0EA" BorderThickness="1" CornerRadius="8">
+                  <StackPanel Spacing="5">
+                    <TextBlock Text="AI 健康缓存（只读，不发探测请求）" FontWeight="SemiBold" Foreground="#24334A" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                      <TextBlock Text="{Binding BusinessConnection.HealthFreshnessText}" Classes="muted" />
+                      <TextBlock Grid.Column="1" Text="{Binding BusinessConnection.HealthCategoryText}" FontWeight="SemiBold" Foreground="#24334A" />
+                    </Grid>
+                    <TextBlock Text="{Binding BusinessConnection.HealthMessage}" Classes="muted" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding BusinessConnection.HealthObservedText}" FontSize="12" Foreground="#596A7F" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding BusinessConnection.HealthSourceText}" FontSize="12" Foreground="#596A7F" />
+                    <Button x:Name="RefreshAiHealthButton" Classes="secondary" Content="读取健康缓存" IsEnabled="{Binding BusinessConnection.CanRefreshAiHealth}" Click="OnBusinessAiHealthRefreshClick" TabIndex="13" HorizontalAlignment="Left" />
+                  </StackPanel>
+                </Border>
+
+                <WrapPanel>
+                  <Button x:Name="CheckAiConfigurationButton" Classes="secondary" Content="检查配置（仅本地，不联网）" IsEnabled="{Binding BusinessConnection.CanCheckConfiguration}" Click="OnBusinessAiCheckClick" TabIndex="14" />
+                  <Button x:Name="ManualAiTestButton" Classes="secondary" Content="手动测试 AI（可能产生费用）" IsEnabled="{Binding BusinessConnection.CanRunManualTest}" Click="OnBusinessManualAiTestClick" TabIndex="15" />
+                  <Button x:Name="CancelManualAiTestButton" Classes="secondary" Content="取消等待（结果可能未知）" IsVisible="{Binding BusinessConnection.CanCancelManualTest}" IsEnabled="{Binding BusinessConnection.CanCancelManualTest}" Click="OnBusinessManualAiTestCancelClick" TabIndex="16" />
+                </WrapPanel>
+
+                <Border IsVisible="{Binding BusinessConnection.ShowManualTestStatus}" Padding="12" Background="#F5F7FA" BorderBrush="#D8E0EA" BorderThickness="1" CornerRadius="8">
+                  <StackPanel Spacing="4">
+                    <TextBlock Text="手动 AI 测试结果（仅当前账号与 Launcher 窗口）" FontWeight="SemiBold" Foreground="#24334A" />
+                    <TextBlock Text="{Binding BusinessConnection.ManualTestSource}" Classes="muted" />
+                    <TextBlock Text="{Binding BusinessConnection.ManualTestMessage}" TextWrapping="Wrap" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                      <TextBlock Text="{Binding BusinessConnection.ManualTestTime}" Classes="muted" />
+                      <TextBlock Grid.Column="1" Text="{Binding BusinessConnection.ManualTestLatency}" Classes="muted" />
+                    </Grid>
+                    <TextBlock IsVisible="{Binding BusinessConnection.IsManualTestUnknown}" Text="结果未知可能表示服务端已处理或计费；系统不会自动重试。若要重测，须重新选择配置并确认。" Foreground="#8A5A00" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          </StackPanel>
+        </ScrollViewer>
+
+        <ScrollViewer IsVisible="{Binding IsDiagnosticsPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="14">
+            <Border Background="{Binding PromptBackground}" BorderBrush="{Binding PromptBorderBrush}" BorderThickness="1" CornerRadius="9" Padding="16">
+              <StackPanel Spacing="5">
+                <TextBlock Text="运行提示" FontSize="16" FontWeight="SemiBold" Foreground="{Binding PromptForeground}" />
+                <TextBlock Text="{Binding ServiceState}" FontSize="15" FontWeight="SemiBold" Foreground="{Binding PromptForeground}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding ServiceDetail}" FontSize="13" Foreground="{Binding PromptForeground}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding PhaseMessage}" FontSize="13" Foreground="{Binding PromptForeground}" TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+            <Border Classes="card">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="section-title" Text="业务数据备份" />
+                <TextBlock Classes="muted" Text="备份与恢复均按现有安全流程执行。切换恢复数据后不会自动启动服务。" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button x:Name="BusinessBackupButton" Classes="secondary" Content="创建业务备份" IsEnabled="{Binding CanCreateBusinessBackup}" Click="OnBusinessBackupClick" TabIndex="19" />
+                  <Button x:Name="BusinessRestoreButton" Classes="secondary" Content="恢复业务备份" IsEnabled="{Binding CanRestoreBusinessBackup}" Click="OnBusinessRestoreClick" TabIndex="20" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+            <Border Classes="card">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="section-title" Text="诊断与状态" />
+                <TextBlock Classes="muted" Text="{Binding ObservationSummary}" TextWrapping="Wrap" />
+                <TextBlock Classes="muted" Text="{Binding FreshnessText}" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button x:Name="DiagnosticExportButton" Classes="secondary" Content="生成诊断摘要" IsEnabled="{Binding CanExportDiagnostic}" Click="OnDiagnosticClick" TabIndex="22" />
+                  <Button Classes="secondary" Content="刷新状态" Click="OnRefreshClick" TabIndex="23" />
+                  <Button Classes="secondary" Content="查看完整日志" Tag="Logs" Click="OnNavigationClick" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+
+        <Border IsVisible="{Binding IsLogsPage}" Background="#101827" BorderBrush="#29364B" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
+          <Grid RowDefinitions="Auto,*">
+            <Border Padding="18,14" BorderBrush="#29364B" BorderThickness="0,0,0,1">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="3">
+                  <TextBlock Text="{Binding LogTitle}" FontSize="16" FontWeight="SemiBold" Foreground="#F4F7FB" />
+                  <TextBlock Text="界面最多保留 300 条；不显示控制口令或数据库凭据。" FontSize="12" Foreground="#C5D0DF" />
+                </StackPanel>
+                <TextBlock Grid.Column="1" Text="只读 · 不可输入命令" FontSize="12" Foreground="#C5D0DF" VerticalAlignment="Center" />
+              </Grid>
+            </Border>
+            <ListBox Grid.Row="1" ItemsSource="{Binding Logs}" Background="Transparent" BorderThickness="0" Padding="12" IsTextSearchEnabled="False">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="local:LogRow">
+                  <Grid ColumnDefinitions="62,50,100,*" Margin="0,3">
+                    <TextBlock Text="{Binding Time}" FontFamily="Consolas" FontSize="12" Foreground="#AAB8CA" />
+                    <TextBlock Grid.Column="1" Text="{Binding Level}" FontSize="12" Foreground="#D6DFEA" />
+                    <TextBlock Grid.Column="2" Text="{Binding Component}" FontSize="12" Foreground="#9ABCF7" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="3" Text="{Binding Message}" FontSize="12" Foreground="#F0F4F9" TextWrapping="Wrap" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E5E8EC" BorderThickness="0,1,0,0" Padding="22,12">
+        <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="9">
+          <StackPanel VerticalAlignment="Center" Spacing="2">
+            <TextBlock Text="{Binding ServiceState}" FontSize="13" FontWeight="SemiBold" Foreground="#344458" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding ObservationSummary}" FontSize="12" Foreground="#657181" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding ObservationSummary}" />
+          </StackPanel>
+          <Button x:Name="CancelRestoreButton" Grid.Column="1" Classes="secondary" Content="取消恢复" IsVisible="{Binding CanCancelBusinessRestore}" IsEnabled="{Binding CanCancelBusinessRestore}" Click="OnCancelRestoreClick" TabIndex="21" />
+          <Button x:Name="CancelButton" Grid.Column="2" Classes="secondary" Content="安全取消" IsVisible="{Binding IsCancelEnabled}" IsEnabled="{Binding IsCancelEnabled}" Click="OnCancelClick" TabIndex="25" />
+          <Button x:Name="StopButton" Grid.Column="3" Classes="danger" Content="停止服务" IsVisible="{Binding IsStopEnabled}" IsEnabled="{Binding IsStopEnabled}" Click="OnStopClick" TabIndex="26" />
+          <Button x:Name="PrimaryButton" Grid.Column="4" Classes="primary" MinWidth="202" MinHeight="56" FontSize="18" Content="{Binding PrimaryButtonText}" IsEnabled="{Binding IsPrimaryEnabled}" Click="OnPrimaryClick" TabIndex="27" />
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

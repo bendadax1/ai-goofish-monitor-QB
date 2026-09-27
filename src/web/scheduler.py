@@ -1,4 +1,4 @@
-﻿import os
+import os
 import asyncio
 import sys
 import re
@@ -10,14 +10,24 @@ import aiofiles
 from apscheduler.triggers.cron import CronTrigger
 
 from src.logging_config import get_logger
+from src.config import CONFIG_FILE
+from src.portable.app_paths import (
+    get_portable_runtime_paths,
+    portable_worker_command,
+    portable_worker_environment,
+)
 from src.storage import get_storage
 from src.web.auth import is_multi_user_mode
 
 
 logger = get_logger(__name__, service="scheduler")
 
-CONFIG_FILE = "config.json"
-RUNTIME_TASK_CONFIG_DIR = os.path.join("state", "runtime_task_configs")
+_portable_runtime_paths = get_portable_runtime_paths()
+RUNTIME_TASK_CONFIG_DIR = str(
+    _portable_runtime_paths.data_path("state", "runtime_task_configs")
+    if _portable_runtime_paths is not None
+    else os.path.join("state", "runtime_task_configs")
+)
 
 
 def _sanitize_identifier(value: str) -> str:
@@ -152,6 +162,14 @@ async def run_single_task(
     owner_id: Optional[str] = None,
 ):
     """由调度器触发的任务执行入口。"""
+    if _portable_runtime_paths is not None:
+        from src.portable.web_runtime import register_portable_background_task, portable_scheduler_start_allowed
+        if not portable_scheduler_start_allowed():
+            logger.info("便携服务正在维护或退出，未发起新的定时任务", extra={"event": "portable_scheduler_admission_closed"})
+            return
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            register_portable_background_task(current_task)
     logger.info(
         f"定时任务触发: task_name={task_name}",
         extra={"event": "scheduled_task_trigger", "task_id": str(task_id), "task_name": task_name, "owner_id": owner_id}
@@ -162,17 +180,22 @@ async def run_single_task(
     process_key = _make_process_key(task_id, task_name, owner_id)
 
     try:
-        os.makedirs("logs", exist_ok=True)
-        log_file_handle = open(os.path.join("logs", "fetcher.log"), "a", encoding="utf-8")
+        log_dir = (
+            str(_portable_runtime_paths.data_path("logs"))
+            if _portable_runtime_paths is not None
+            else "logs"
+        )
+        os.makedirs(log_dir, exist_ok=True)
+        log_file_handle = open(os.path.join(log_dir, "fetcher.log"), "a", encoding="utf-8")
 
-        cmd = [
-            sys.executable,
-            "-u",
-            "collector.py",
+        collector_arguments = [
             "--task-name",
             task_name,
             "--start-reason",
             "scheduled",
+        ]
+        cmd = portable_worker_command("collector", collector_arguments) or [
+            sys.executable, "-u", "collector.py", *collector_arguments,
         ]
 
         child_env = os.environ.copy()
@@ -194,6 +217,10 @@ async def run_single_task(
             except Exception:
                 pass
 
+        portable_child_env = portable_worker_environment(child_env)
+        if portable_child_env is not None:
+            child_env = portable_child_env
+
         preexec_fn = os.setsid if sys.platform != "win32" else None
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -201,6 +228,7 @@ async def run_single_task(
             stderr=log_file_handle,
             preexec_fn=preexec_fn,
             env=child_env,
+            cwd=str(_portable_runtime_paths.data_root) if _portable_runtime_paths is not None else None,
         )
 
         fetcher_processes[process_key] = process
@@ -245,7 +273,10 @@ async def run_single_task(
                     except Exception:
                         pass
 
-        asyncio.create_task(_monitor_process())
+        monitor_task = asyncio.create_task(_monitor_process())
+        if _portable_runtime_paths is not None:
+            from src.portable.web_runtime import register_portable_background_task
+            register_portable_background_task(monitor_task)
 
     except Exception as e:
         logger.error(

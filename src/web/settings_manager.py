@@ -1,4 +1,4 @@
-﻿import os
+import os
 import aiofiles
 import json
 from typing import Optional
@@ -9,6 +9,7 @@ from src.config import (
     get_env_value,
     get_bool_env_value,
     save_env_settings,
+    PORTABLE_APP_ENV_ALLOWED_KEYS,
     normalize_database_url,
     STORAGE_BACKEND,
     DATABASE_URL,
@@ -16,7 +17,14 @@ from src.config import (
     WEB_PASSWORD
 )
 from src.storage import get_storage
+from src.storage.postgres_adapter import ApiConfigRevisionConflict
+from src.portable.context import portable_mode
 from src.logging_config import get_logger
+from src.portable.app_paths import (
+    get_portable_runtime_paths,
+    portable_worker_command,
+    portable_worker_environment,
+)
 from src.user_file_store import list_scoped_files, resolve_scoped_path
 from src.web.ai_health import get_ai_health_snapshot, invalidate_ai_health_snapshot
 from src.web.auth import require_auth, check_permission, has_category, get_user_management_level
@@ -290,6 +298,34 @@ def _build_ai_settings_from_user_api_config(user_api_config: dict) -> dict:
     }
 
 
+def _ai_url_origin(value: str) -> tuple[str, str, Optional[int]]:
+    """Return the URL origin used to decide whether a saved key changes target."""
+    parsed = urlparse(str(value or "").strip())
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Base URL 端口无效。") from exc
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
+
+
+def _portable_ai_config_response(user_api_config: dict) -> dict:
+    settings = _build_ai_settings_from_user_api_config(user_api_config)
+    ready = bool(
+        settings.get("OPENAI_API_KEY_SET")
+        and settings.get("OPENAI_BASE_URL")
+        and settings.get("OPENAI_MODEL_NAME")
+    )
+    settings.update({
+        "config_revision": int(user_api_config.get("config_revision") or 0),
+        "config_id": str(user_api_config.get("id") or ""),
+        "config_source": "user_default_api_config",
+        "effective_state": "applies_to_new_requests" if ready else "needs_setup",
+    })
+    settings["IS_MULTI_USER_MODE"] = True
+    settings["NEEDS_SETUP"] = not ready
+    return settings
+
+
 def _to_bool_value(value, default: bool = False) -> bool:
     """把任意值转换为布尔值。"""
     if isinstance(value, bool):
@@ -429,7 +465,10 @@ async def get_system_status(user: dict = Depends(_require_settings_admin)):
             del fetcher_processes[task_id]
             from src.web.task_manager import update_task_running_status
             import asyncio
-            asyncio.create_task(update_task_running_status(task_id, False))
+            status_task = asyncio.create_task(update_task_running_status(task_id, False))
+            if get_portable_runtime_paths() is not None:
+                from src.portable.web_runtime import register_portable_background_task
+                register_portable_background_task(status_task)
 
     storage_runtime = _get_storage_runtime_status()
     ai_health = get_ai_health_snapshot(user)
@@ -860,7 +899,12 @@ async def delete_bayes_profile(filename: str, user: dict = Depends(_require_ai_a
 @router.get("/api/guides/bayes")
 async def get_bayes_guide(_user: dict = Depends(_require_ai_or_tasks_access)):
     """??Bayes??????????"""
-    guide_path = os.path.join("prompts", "guide", "bayes_guide.md")
+    portable_paths = get_portable_runtime_paths()
+    guide_path = (
+        str(portable_paths.program_path("prompts", "guide", "bayes_guide.md"))
+        if portable_paths is not None
+        else os.path.join("prompts", "guide", "bayes_guide.md")
+    )
     if not os.path.exists(guide_path):
         raise HTTPException(status_code=404, detail="Bayes????????")
     async with aiofiles.open(guide_path, 'r', encoding='utf-8') as f:
@@ -918,8 +962,8 @@ async def delete_prompt(filename: str, user: dict = Depends(_require_ai_access))
 async def _cleanup_login_process(process):
     """清理登录进程的后台任务"""
     await process.wait()
-    from src.web.main import login_process
-    login_process = None
+    import src.web.main as web_main
+    web_main.login_process = None
     logger.info(
         "自动登录程序已结束",
         extra={"event": "manual_login_process_stopped", "pid": process.pid}
@@ -929,39 +973,54 @@ async def _cleanup_login_process(process):
 @router.post("/api/manual-login")
 async def start_manual_login(_user: dict = Depends(_require_accounts_access)):
     """启动自动登录程序 login.py"""
-    from src.web.main import login_process
+    import src.web.main as web_main
     import asyncio
     import sys
 
     try:
-        if not os.path.exists("login.py"):
+        portable_paths = get_portable_runtime_paths()
+        login_script = (
+            portable_paths.program_path("login.py")
+            if portable_paths is not None
+            else "login.py"
+        )
+        if not os.path.exists(login_script):
             raise HTTPException(status_code=500, detail="未找到 login.py，无法启动自动登录程序。")
 
-        if login_process is not None and login_process.returncode is None:
+        if web_main.login_process is not None and web_main.login_process.returncode is None:
             return {"message": "已有登录进程在运行中，请等待其完成或关闭后再尝试。"}
 
         child_env = os.environ.copy()
         child_env["PYTHONIOENCODING"] = "utf-8"
         child_env["PYTHONUTF8"] = "1"
 
+        command = portable_worker_command("login", []) or [sys.executable, "-u", "login.py"]
+        portable_child_env = portable_worker_environment(child_env)
+        if portable_child_env is not None:
+            child_env = portable_child_env
+
         process = await asyncio.create_subprocess_exec(
-            sys.executable, "-u", "login.py",
+            *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=child_env
+            env=child_env,
+            cwd=str(portable_paths.data_root) if portable_paths is not None else None,
         )
 
-        login_process = process
+        web_main.login_process = process
         logger.info(
             "自动登录程序已启动",
             extra={"event": "manual_login_process_started", "pid": process.pid}
         )
 
-        asyncio.create_task(_cleanup_login_process(process))
+        cleanup_task = asyncio.create_task(_cleanup_login_process(process))
+        if portable_paths is not None:
+            from src.portable.web_runtime import register_portable_background_task
+            register_portable_background_task(cleanup_task)
 
         return {"message": "自动登录程序已成功启动，请在服务器上查看浏览器窗口并完成登录。"}
     except Exception as e:
-        login_process = None
+        web_main.login_process = None
         raise HTTPException(status_code=500, detail=f"启动自动登录程序时出错: {str(e)}")
 
 
@@ -1068,6 +1127,9 @@ async def get_generic_settings(_user: dict = Depends(_require_settings_admin)):
         else:
             settings[key] = get_env_value(key)
     
+    if portable_mode():
+        settings["PORTABLE_MODE"] = True
+        settings["WRITABLE_KEYS"] = sorted(set(generic_keys) & PORTABLE_APP_ENV_ALLOWED_KEYS)
     return settings
 
 
@@ -1076,6 +1138,13 @@ async def update_generic_settings(settings: GenericSettings, _user: dict = Depen
     """更新通用设置。"""
     try:
         settings_dict = settings.model_dump(exclude_none=True)
+        if portable_mode():
+            if set(settings_dict).difference(PORTABLE_APP_ENV_ALLOWED_KEYS):
+                raise HTTPException(status_code=400, detail="便携版此入口只支持非敏感系统偏好；端口请在 Launcher 设置，账号请在用户管理中修改")
+            save_env_settings(settings_dict, list(settings_dict))
+            from src.config import reload_config
+            reload_config()
+            return {"message": "便携版系统偏好已更新，对新启动的任务生效。"}
         settings_dict = _preserve_secret_on_empty(settings_dict, _GENERIC_SECRET_KEYS)
         generic_keys = [
             "LOGIN_IS_EDGE", "RUN_HEADLESS", "AI_DEBUG_MODE",
@@ -1089,7 +1158,13 @@ async def update_generic_settings(settings: GenericSettings, _user: dict = Depen
         reload_config()
 
         return {"message": "通用设置已成功更新。"}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error("通用设置值无效", extra={"event": "generic_settings_invalid"}, exc_info=e)
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.error("通用设置保存失败", extra={"event": "generic_settings_save_failed"}, exc_info=e)
         raise HTTPException(status_code=500, detail=f"更新通用设置时出错: {e}")
 
 
@@ -1099,6 +1174,9 @@ async def get_ai_settings(user: dict = Depends(_require_ai_or_tasks_access)):
     if STORAGE_BACKEND() == "postgres":
         user_id = _resolve_current_user_id(user)
         storage = get_storage()
+        if portable_mode():
+            config = storage.get_default_api_config_with_revision(user_id) or {"config_revision": 0}
+            return _portable_ai_config_response(config)
         user_api_config = storage.get_default_api_config(user_id) or {}
         settings = _build_ai_settings_from_user_api_config(user_api_config)
         settings["IS_MULTI_USER_MODE"] = True
@@ -1143,6 +1221,82 @@ async def update_ai_settings(settings: dict, user: dict = Depends(_require_ai_ac
         if STORAGE_BACKEND() == "postgres":
             user_id = _resolve_current_user_id(user)
             storage = get_storage()
+            if portable_mode():
+                try:
+                    expected_revision = int(settings.get("config_revision"))
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=428, detail="缺少有效的 config_revision，请重新读取配置。")
+                expected_config_id = settings.get("config_id")
+                if not isinstance(expected_config_id, str):
+                    raise HTTPException(status_code=428, detail="缺少配置身份，请重新读取配置。")
+
+                existing = storage.get_default_api_config_with_revision(user_id) or {
+                    "config_revision": 0,
+                    "api_base_url": "",
+                    "api_key": "",
+                }
+                field_updates = {}
+                if "OPENAI_BASE_URL" in settings:
+                    final_base_url = str(settings.get("OPENAI_BASE_URL") or "").strip()
+                    if final_base_url != str(existing.get("api_base_url") or "").strip():
+                        field_updates["api_base_url"] = final_base_url
+                if "OPENAI_MODEL_NAME" in settings:
+                    model_value = str(settings.get("OPENAI_MODEL_NAME") or "").strip()
+                    if model_value != str(existing.get("model") or "").strip():
+                        field_updates["model"] = model_value
+                existing_extra = existing.get("extra_config") if isinstance(existing.get("extra_config"), dict) else {}
+                for key in ("PROXY_URL", "AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT"):
+                    if key not in settings:
+                        continue
+                    value = settings.get(key)
+                    if key == "AI_MAX_TOKENS_LIMIT" and value not in (None, ""):
+                        try:
+                            value = int(value)
+                        except (TypeError, ValueError):
+                            raise HTTPException(status_code=400, detail="AI_MAX_TOKENS_LIMIT 必须是整数。")
+                    if value in (None, ""):
+                        if key in existing_extra:
+                            field_updates.setdefault("extra_config", {})[key] = None
+                    elif existing_extra.get(key) != value:
+                        field_updates.setdefault("extra_config", {})[key] = value
+
+                raw_api_key = str(settings.get("OPENAI_API_KEY") or "").strip()
+                remove_api_key = settings.get("remove_api_key") is True
+                if raw_api_key and remove_api_key:
+                    raise HTTPException(status_code=400, detail="API Key 替换与移除不能同时提交。")
+                old_base_url = str(existing.get("api_base_url") or "").strip()
+                new_base_url = str(field_updates.get("api_base_url", old_base_url)).strip()
+                host_changed = _ai_url_origin(old_base_url) != _ai_url_origin(new_base_url)
+                old_key_is_set = bool(str(existing.get("api_key") or "").strip()) or bool(existing.get("api_key_invalid"))
+                if host_changed and old_key_is_set and not raw_api_key and not remove_api_key:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Base URL 主机已变更；请同时提交新 API Key，或明确设置 remove_api_key=true。",
+                    )
+                if raw_api_key and (raw_api_key != str(existing.get("api_key") or "").strip() or host_changed):
+                    field_updates["api_key"] = raw_api_key
+                elif remove_api_key and old_key_is_set:
+                    field_updates["remove_api_key"] = True
+
+                try:
+                    saved_config = storage.update_default_api_config_fields(
+                        user_id, expected_revision, expected_config_id, field_updates
+                    )
+                except ApiConfigRevisionConflict as exc:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"message": "AI 配置已被其他页面修改，请刷新后核对冲突。", "current_revision": exc.current_revision},
+                    ) from exc
+                if field_updates:
+                    invalidate_ai_health_snapshot(user)
+                return {
+                    "message": "AI 配置未发生变化。" if not field_updates else "AI 模型设置已保存。",
+                    "config_revision": saved_config.get("config_revision", expected_revision + 1),
+                    "config_id": str(saved_config.get("id") or ""),
+                    "config_source": "user_default_api_config",
+                    "effective_state": _portable_ai_config_response(saved_config)["effective_state"],
+                }
+
             existing = storage.get_default_api_config(user_id) or {}
 
             existing_extra_config = existing.get("extra_config") if isinstance(existing.get("extra_config"), dict) else {}
@@ -1215,6 +1369,8 @@ async def update_ai_settings(settings: dict, user: dict = Depends(_require_ai_ac
         reload_config()
         invalidate_ai_health_snapshot(user)
         return {"message": "AI模型设置已成功更新。"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新AI模型设置时出错: {e}")
 
@@ -1225,10 +1381,17 @@ async def get_proxy_settings(user: dict = Depends(_require_settings_admin)):
     if STORAGE_BACKEND() == "postgres":
         user_id = _resolve_current_user_id(user)
         storage = get_storage()
-        user_api_config = storage.get_default_api_config(user_id) or {}
+        if portable_mode():
+            user_api_config = storage.get_default_api_config_with_revision(user_id) or {"config_revision": 0}
+        else:
+            user_api_config = storage.get_default_api_config(user_id) or {}
         extra_config = user_api_config.get("extra_config") if isinstance(user_api_config.get("extra_config"), dict) else {}
         settings = _build_proxy_settings_from_extra_config(extra_config)
         settings["IS_MULTI_USER_MODE"] = True
+        if portable_mode():
+            settings["config_revision"] = int(user_api_config.get("config_revision") or 0)
+            settings["config_id"] = str(user_api_config.get("id") or "")
+            settings["config_source"] = "user_default_api_config"
         return settings
 
     settings = {}
@@ -1246,6 +1409,46 @@ async def update_proxy_settings(settings: dict, user: dict = Depends(_require_se
         if STORAGE_BACKEND() == "postgres":
             user_id = _resolve_current_user_id(user)
             storage = get_storage()
+            if portable_mode():
+                try:
+                    expected_revision = int(settings.get("config_revision"))
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=428, detail="缺少有效的 config_revision，请重新读取配置。")
+                expected_config_id = settings.get("config_id")
+                if not isinstance(expected_config_id, str):
+                    raise HTTPException(status_code=428, detail="缺少配置身份，请重新读取配置。")
+                existing = storage.get_default_api_config_with_revision(user_id) or {
+                    "config_revision": 0,
+                    "extra_config": {},
+                }
+                existing_extra = existing.get("extra_config") if isinstance(existing.get("extra_config"), dict) else {}
+                extra_patch = {}
+                for key in _PROXY_SETTING_KEYS:
+                    if key not in settings:
+                        continue
+                    if key in _PROXY_BOOL_KEYS:
+                        value = _to_bool_value(settings.get(key), default=False)
+                    else:
+                        value = str(settings.get(key) or "").strip()
+                    if existing_extra.get(key) != value:
+                        extra_patch[key] = value
+                field_updates = {"extra_config": extra_patch} if extra_patch else {}
+                try:
+                    saved = storage.update_default_api_config_fields(user_id, expected_revision, expected_config_id, field_updates)
+                except ApiConfigRevisionConflict as exc:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"message": "AI 配置已被其他页面修改，请刷新后核对冲突。", "current_revision": exc.current_revision},
+                    ) from exc
+                if field_updates:
+                    invalidate_ai_health_snapshot(user)
+                return {
+                    "message": "代理设置未发生变化。" if not field_updates else "代理设置已保存。",
+                    "config_revision": saved.get("config_revision", expected_revision + 1),
+                    "config_id": str(saved.get("id") or ""),
+                    "config_source": "user_default_api_config",
+                }
+
             existing = storage.get_default_api_config(user_id) or {}
             existing_extra_config = existing.get("extra_config") if isinstance(existing.get("extra_config"), dict) else {}
             merged_extra_config = dict(existing_extra_config)
@@ -1293,6 +1496,8 @@ async def update_proxy_settings(settings: dict, user: dict = Depends(_require_se
         invalidate_ai_health_snapshot(user)
 
         return {"message": "代理设置已成功更新。"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新代理设置时出错: {e}")
 

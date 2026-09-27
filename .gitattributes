@@ -1,1 +1,6 @@
 *.bat text eol=crlf
+
+# Release notice inputs are verified byte-for-byte against recorded SHA-256.
+scripts/portable/third-party-notices/avalonia-MIT.txt -text
+scripts/portable/third-party-notices/chromium-143-r1200-credits.html -text
+scripts/portable/third-party-notices/onnxruntime-headers-v1.23.0-MIT.txt -text

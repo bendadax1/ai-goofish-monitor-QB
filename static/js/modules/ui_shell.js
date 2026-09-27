@@ -1,4 +1,4 @@
-﻿﻿﻿﻿// UI壳层与下拉定位
+// UI壳层与下拉定位
 var uiMainContent = null;
 var uiShellInitialized = false;
 

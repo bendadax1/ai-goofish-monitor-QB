@@ -4,10 +4,22 @@
 """
 版本信息文件
 """
-VERSION = "V1.0.4.5"
+VERSION = "V1.1.0.0-beta"
 
 
 VERSION_HISTORY = [
+
+    {
+        "version": "V1.1.0.0-beta",
+        "date": "2026-09-27",
+        "changes": [
+            "新增 Windows x64 便携 Launcher，集成 PostgreSQL、Python 和浏览器运行时",
+            "统一启动、停止、重启与端口管理流程，增加持久启动诊断和脱敏导出",
+            "提供无需重新打包的 Launcher 增量开发和真实启动链路验收入口",
+            "修复普通构建及交付产物的权限继承，保留凭据的独立保护",
+            "基于 r10 启动验收提交 beta；干净 Windows、完整业务和备份恢复稳定性仍待补验",
+        ]
+    },
 
     {
         "version": "V1.0.4.5",

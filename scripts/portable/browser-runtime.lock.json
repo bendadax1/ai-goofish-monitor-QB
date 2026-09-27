@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "component": "browser-runtime",
+  "playwright_version": "1.57.0",
+  "chromium_revision": "1200",
+  "browser_version": "143.0.7499.4",
+  "platform": "win64",
+  "file_name": "chromium-1200-win64.zip",
+  "url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1200/chromium-win64.zip",
+  "source_registry": "playwright/driver/package/lib/server/registry/index.js",
+  "source_download_path": "builds/chromium/1200/chromium-win64.zip",
+  "archive_bytes": 178067817,
+  "sha256": "4b4d412c65ffa6486eebdeb7ca05186c9598f90a60fb67e201fb8afa27776ab6",
+  "verification": "playwright_cdn_https_local_sha256",
+  "signature_verified": false,
+  "archive_root": "chrome-win64",
+  "executable_relative_path": "chrome-win64/chrome.exe",
+  "python_runtime_id": "e67c6b779c81"
+}

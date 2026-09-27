@@ -1,8 +1,10 @@
 # Python虚拟环境
+/tmpvqxomkly/
 venv/
 env/
 
 # Python缓存和编译文件
+.tmp/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -29,6 +31,8 @@ start_web_server.bat
 .env
 config.json
 docs/
+launcher/
+scripts/portable/
 AGENTS.md
 GEMINI.md
 CLAUDE.md

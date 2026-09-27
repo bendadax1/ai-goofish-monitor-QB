@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Optional
 
 from src.log_formatters import JSONLinesFormatter, ColoredConsoleFormatter, StructuredFilter
+from src.log_retention import (
+    _process_open_file_ids,
+    has_reparse_ancestor,
+    is_file_open,
+    is_reparse_point,
+)
 
 
 # 全局配置
@@ -165,6 +171,10 @@ def get_task_logger(task_name: str, task_id: int, log_dir: str = "logs") -> logg
     Returns:
         任务专用logger
     """
+    from src.portable.app_paths import get_portable_runtime_paths
+    portable_paths = get_portable_runtime_paths()
+    if portable_paths is not None and log_dir == "logs":
+        log_dir = str(portable_paths.data_path("logs"))
     logger_name = f"task.{task_id}"
     
     # 如果已存在，直接返回
@@ -218,24 +228,87 @@ def cleanup_old_logs(log_dir: str = "logs", retention_days: int = 7) -> None:
         retention_days: 保留天数
     """
     import time
-    from datetime import timedelta
     
     log_path = Path(log_dir)
-    if not log_path.exists():
+    try:
+        log_path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        get_logger(__name__).error(
+            "检查日志目录失败，未执行清理",
+            extra={"service": "system", "event": "log_cleanup_root_error"},
+            exc_info=(type(e), e, e.__traceback__),
+        )
+        return
+    if has_reparse_ancestor(log_path):
         return
     
-    cutoff_time = time.time() - timedelta(days=retention_days).total_seconds()
-    
-    for log_file in log_path.rglob("*.log*"):
-        if log_file.is_file() and log_file.stat().st_mtime < cutoff_time:
+    # Preserve the manual API's explicit retention_days semantics. The default
+    # is seven days; setup_logging does not run this destructive cleanup.
+    retention_days = int(retention_days)
+    cutoff_time = time.time() - retention_days * 24 * 60 * 60
+    active_paths = set()
+    root_logger = logging.getLogger()
+    handlers = list(root_logger.handlers)
+    for configured_logger in logging.Logger.manager.loggerDict.values():
+        if isinstance(configured_logger, logging.Logger):
+            handlers.extend(configured_logger.handlers)
+    for handler in handlers:
+        active_path = getattr(handler, "baseFilename", None)
+        if active_path:
+            active_paths.add(active_path)
+    open_file_ids = _process_open_file_ids()
+
+    # Walk explicitly so junctions/symlinks are never traversed. The exports
+    # subtree has its own retention policy and is not a source-log directory.
+    def _walk_error(error: OSError) -> None:
+        get_logger(__name__).error(
+            "枚举日志目录失败，未能检查部分文件",
+            extra={"service": "system", "event": "log_cleanup_enumerate_error"},
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+    for current, directories, filenames in os.walk(
+        log_path, followlinks=False, onerror=_walk_error
+    ):
+        current_path = Path(current)
+        directories[:] = [
+            name for name in directories
+            if name.casefold() != "exports"
+            and not is_reparse_point(current_path / name)
+        ]
+        for filename in filenames:
+            log_file = current_path / filename
+            rotated_suffix = filename.rsplit(".log.", 1)[-1]
+            is_managed_log = filename.endswith(".log") or (
+                ".log." in filename and rotated_suffix.isdecimal()
+            )
+            if not is_managed_log or is_reparse_point(log_file):
+                continue
             try:
+                file_stat = log_file.stat()
+                if not log_file.is_file() or file_stat.st_mtime >= cutoff_time:
+                    continue
+                try:
+                    file_is_open = is_file_open(log_file, active_paths, open_file_ids)
+                except Exception as e:
+                    logger = get_logger(__name__)
+                    logger.error(
+                        "无法核验日志文件是否仍在使用，已保留",
+                        extra={"service": "system", "event": "log_cleanup_open_check_error"},
+                        exc_info=(type(e), e, e.__traceback__),
+                    )
+                    continue
+                if file_is_open:
+                    continue
                 log_file.unlink()
                 logger = get_logger(__name__)
                 logger.info(
                     f"已删除过期日志: {log_file.name}",
                     extra={"service": "system", "event": "log_cleanup"}
                 )
-            except Exception as e:
+            except OSError as e:
                 logger = get_logger(__name__)
                 logger.error(
                     f"删除日志文件失败: {log_file.name}",
