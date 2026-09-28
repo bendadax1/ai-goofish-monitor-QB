@@ -307,7 +307,7 @@ async function changeMyPassword(passwordData) {
     });
     const data = await response.json();
     if (!response.ok) {
-        throw new Error(data.detail || '修改密码失败');
+        throw new Error(GoofishAccountPolicy.validationMessage(data.detail, '修改密码失败'));
     }
     return data;
 }
@@ -320,7 +320,7 @@ async function resetUserPassword(userId, passwordData) {
     });
     const data = await response.json();
     if (!response.ok) {
-        throw new Error(data.detail || '重置用户密码失败');
+        throw new Error(GoofishAccountPolicy.validationMessage(data.detail, '重置用户密码失败'));
     }
     return data;
 }
@@ -334,7 +334,7 @@ async function createUser(userData) {
         });
         const data = await response.json();
         if (!response.ok) {
-            throw new Error(data.detail || '创建用户失败');
+            throw new Error(GoofishAccountPolicy.validationMessage(data.detail, '创建用户失败'));
         }
         return data;
     } catch (error) {
@@ -682,7 +682,7 @@ function renderMyProfile(container, profile) {
                     </div>
                     <div class="form-group">
                         <label>新密码</label>
-                        <input type="password" id="new-password-input" placeholder="请输入新密码（至少6位）">
+                        <input type="password" id="new-password-input" placeholder="请输入新密码（${GoofishAccountPolicy.passwordHint}）">
                     </div>
                     <div class="form-group">
                         <label>确认新密码</label>
@@ -820,8 +820,9 @@ function attachProfileEventListeners(container, profile) {
                 return;
             }
 
-            if (newPassword.length < 6) {
-                Notification.warning('新密码至少需要 6 位');
+            const passwordError = GoofishAccountPolicy.passwordError(newPassword);
+            if (passwordError) {
+                Notification.warning(passwordError);
                 return;
             }
 
@@ -837,6 +838,7 @@ function attachProfileEventListeners(container, profile) {
                 container.querySelector('#new-password-input').value = '';
                 container.querySelector('#confirm-password-input').value = '';
             } catch (error) {
+                console.error('修改密码失败，未记录密码。');
                 Notification.error(error.message);
             }
         });
@@ -1613,7 +1615,7 @@ function renderEditUserProfile(container, user) {
                 <div class="password-change-form">
                     <div class="form-group">
                         <label>新密码</label>
-                        <input type="password" id="reset-user-new-password" placeholder="请输入新密码（至少6位）">
+                        <input type="password" id="reset-user-new-password" placeholder="请输入新密码（${GoofishAccountPolicy.passwordHint}）">
                     </div>
                     <div class="form-group">
                         <label>确认新密码</label>
@@ -1660,8 +1662,9 @@ function attachEditUserEventListeners(container) {
                 Notification.warning('请输入新密码');
                 return;
             }
-            if (newPassword.length < 6) {
-                Notification.warning('新密码至少需要 6 位');
+            const passwordError = GoofishAccountPolicy.passwordError(newPassword);
+            if (passwordError) {
+                Notification.warning(passwordError);
                 return;
             }
             if (newPassword !== confirmPassword) {
@@ -1689,6 +1692,7 @@ function attachEditUserEventListeners(container) {
                 if (newPasswordInput) newPasswordInput.value = '';
                 if (confirmPasswordInput) confirmPasswordInput.value = '';
             } catch (error) {
+                console.error('重置用户密码失败，未记录密码。');
                 Notification.error(error.message || '重置用户密码失败');
             } finally {
                 resetPasswordBtn.disabled = false;
@@ -1730,6 +1734,11 @@ function attachUserEventListeners(container, refreshCallback, canManage) {
 
             if (!username || !password) {
                 Notification.warning('用户名和密码不能为空');
+                return;
+            }
+            const passwordError = GoofishAccountPolicy.passwordError(password);
+            if (passwordError) {
+                Notification.warning(passwordError);
                 return;
             }
             if (!groupIds.length) {
@@ -2132,7 +2141,7 @@ function renderProfilePage(container, profile) {
                     </div>
                     <div class="profile-form-group">
                         <label for="profile-new-password">新密码</label>
-                        <input type="password" id="profile-new-password" class="profile-input" placeholder="请输入新密码（至少6位）">
+                        <input type="password" id="profile-new-password" class="profile-input" placeholder="请输入新密码（${GoofishAccountPolicy.passwordHint}）">
                     </div>
                     <div class="profile-form-group">
                         <label for="profile-confirm-password">确认新密码</label>
@@ -2228,8 +2237,9 @@ function attachProfilePageEventListeners(container, profile) {
                 Notification.error('请输入当前密码');
                 return;
             }
-            if (!newPassword || newPassword.length < 6) {
-                Notification.error('新密码至少需要 6 位');
+            const passwordError = GoofishAccountPolicy.passwordError(newPassword);
+            if (passwordError) {
+                Notification.error(passwordError);
                 return;
             }
             if (newPassword !== confirmPassword) {
@@ -2237,16 +2247,18 @@ function attachProfilePageEventListeners(container, profile) {
                 return;
             }
 
-            const result = await changeMyPassword({
-                current_password: currentPassword,
-                new_password: newPassword
-            });
-
-            if (result) {
+            try {
+                await changeMyPassword({
+                    old_password: currentPassword,
+                    new_password: newPassword
+                });
                 Notification.success('密码修改成功');
                 currentPasswordInput.value = '';
                 newPasswordInput.value = '';
                 confirmPasswordInput.value = '';
+            } catch (error) {
+                console.error('修改密码失败，未记录密码。');
+                Notification.error(error.message || '修改密码失败');
             }
         });
     }

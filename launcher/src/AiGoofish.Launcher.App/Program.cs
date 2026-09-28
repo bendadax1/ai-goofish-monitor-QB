@@ -72,6 +72,9 @@ internal static class Program
 
     private static int Run(string[] args)
     {
+        if (string.Equals(Path.GetFileName(Environment.ProcessPath), "uninstall.exe", StringComparison.OrdinalIgnoreCase))
+            return PortableUninstaller.Run(args);
+
 #if LAUNCHER_DEVELOPMENT
         if (args.Length == 4 && args[0] == "--development")
         {

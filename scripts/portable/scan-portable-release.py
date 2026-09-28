@@ -30,7 +30,7 @@ _HASH = re.compile(r"^[0-9a-f]{64}$")
 # This one official PostgreSQL 17.11-3 Windows archive notice is hash-locked,
 # retained byte-for-byte, and uses a legacy encoding. No other notice is exempt.
 _PINNED_LEGACY_NOTICE_HASHES = {
-    "postgres/postgresql-17.11-3-windows-x64/commandlinetools_3rd_party_licenses.txt":
+    "postgres/commandlinetools_3rd_party_licenses.txt":
         "67181bbd5ddb5a0094aa9c82b97536a27811461a3b61c3c11588a2731cfc7b3b",
 }
 _PYTHON_LOCK_PATH = Path(__file__).with_name("requirements-python.lock.txt")
@@ -152,7 +152,7 @@ def scan(root: Path) -> dict[str, object]:
             parts = [part.casefold() for part in PurePosixPath(relative).parts]
             if parts and parts[0] in _DATA_NAMES:
                 findings.append({"code": "user-data-path", "path": relative})
-            elif len(parts) >= 3 and parts[0] == "app" and parts[2] in _DATA_NAMES:
+            elif len(parts) >= 2 and parts[0] == "app" and parts[1] in _DATA_NAMES:
                 findings.append({"code": "user-data-path", "path": relative})
             recorded = expected.get(relative)
             if recorded is None:

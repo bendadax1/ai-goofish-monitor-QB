@@ -7,11 +7,56 @@ using Avalonia;
 using Avalonia.Layout;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.Headless;
+using Avalonia.Media.Imaging;
 
 namespace AiGoofish.Launcher.Ui.Smoke;
 
 internal static class WebPortUiAcceptance
 {
+    public static async Task SaveSettingsPreviewAsync(string outputDirectory)
+    {
+        // Reuse the in-memory host fixture; no real service or port configuration is changed.
+        await using var fixture = await Fixture.CreateAsync(running: false, webPortCanBind: _ => true);
+        fixture.ViewModel.SelectPage(LauncherPage.Settings);
+        foreach (var size in new[] { new Size(1120, 760), new Size(920, 640) })
+        {
+            fixture.Window.Width = size.Width;
+            fixture.Window.Height = size.Height;
+            PumpJobs();
+            var apply = fixture.Window.FindControl<Button>("ApplyWebPortButton")!;
+            apply.BringIntoView();
+            PumpJobs();
+            var point = apply.TranslatePoint(default, fixture.Window);
+            Assert(point is { } p && p.X >= 0 && p.Y >= 0 &&
+                p.X + apply.Bounds.Width <= fixture.Window.ClientSize.Width &&
+                p.Y + apply.Bounds.Height <= fixture.Window.ClientSize.Height,
+                "端口应用按钮在两种窗口尺寸下均可滚动到达。");
+            using var frame = fixture.Window.CaptureRenderedFrame()
+                ?? throw new InvalidOperationException("Settings preview frame unavailable.");
+            frame.Save(Path.Combine(outputDirectory, $"slim-port-settings-{size.Width}x{size.Height}.png"), PngBitmapEncoderOptions.Default);
+        }
+        await fixture.ViewModel.BusinessConnection.SetHostReadyAsync(true);
+        await fixture.ViewModel.BusinessConnection.BeginPairingAsync("http://127.0.0.1:58000/api/launcher/authorize");
+        PumpUntil(() => fixture.ViewModel.BusinessConnection.IsPaired, TimeSpan.FromSeconds(3), "AI 预览配对未完成。");
+        fixture.ViewModel.SelectPage(LauncherPage.Ai);
+        fixture.ViewModel.BusinessConnection.TokensParameter = "max_completion_tokens";
+        fixture.ViewModel.BusinessConnection.TokensLimit = "8192";
+        var advanced = fixture.Window.FindControl<Expander>("AiAdvancedParameters")!;
+        advanced.IsExpanded = true;
+        foreach (var size in new[] { new Size(1120, 760), new Size(920, 640) })
+        {
+            fixture.Window.Width = size.Width;
+            fixture.Window.Height = size.Height;
+            PumpJobs();
+            advanced.BringIntoView();
+            PumpJobs();
+            using var frame = fixture.Window.CaptureRenderedFrame()
+                ?? throw new InvalidOperationException("AI advanced preview unavailable.");
+            frame.Save(Path.Combine(outputDirectory, $"ai-advanced-{size.Width}x{size.Height}.png"), PngBitmapEncoderOptions.Default);
+        }
+    }
+
     public static async Task RunDiagnosticPreviewAcceptanceAsync()
     {
         var root = Path.Combine(Environment.CurrentDirectory, ".tmp", "tests", "launcher-diagnostic-ui", Guid.NewGuid().ToString("N"));
@@ -826,7 +871,9 @@ internal static class WebPortUiAcceptance
         }
         public Task<LauncherAiConfiguration> SaveAiConfigurationAsync(int configRevision, string configId,
             string? baseUrl, string? modelName, string? replacementApiKey, bool removeApiKey = false,
-            CancellationToken cancellationToken = default) => GetAiConfigurationAsync(cancellationToken);
+            CancellationToken cancellationToken = default,
+        string? tokensParameter = null,
+        int? tokensLimit = null) => GetAiConfigurationAsync(cancellationToken);
         public Task<LauncherAiManualTestResult> RunManualAiTestAsync(bool explicitlyConfirmed, string requestId,
             string expectedConfigId, int expectedConfigRevision, string? baseUrl, string? modelName, string? apiKey,
             CancellationToken cancellationToken = default)

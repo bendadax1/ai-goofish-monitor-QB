@@ -162,6 +162,8 @@ public sealed record LauncherAiConfiguration(
     bool? IsMultiUserMode,
     bool? NeedsSetup)
 {
+    public string? TokensParameter { get; init; }
+    public int? TokensLimit { get; init; }
     public override string ToString() =>
         $"LauncherAiConfiguration(ApiKeySet={ApiKeySet}, ModelName={ModelName ?? "[none]"}, ConfigRevision={ConfigRevision}, API key=[REDACTED])";
 }
@@ -535,14 +537,18 @@ public sealed class PortableLauncherUserClient : IDisposable
         string? modelName,
         string? replacementApiKey,
         bool removeApiKey = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? tokensParameter = null,
+        int? tokensLimit = null)
     {
         ThrowIfDisposed();
         if (configRevision < 0 || configId is null || configId.Length > 128 ||
             (configId.Length == 0 ? configRevision != 0 : string.IsNullOrWhiteSpace(configId)) ||
             (replacementApiKey is not null && (removeApiKey || replacementApiKey.Length > 4096)) ||
             (baseUrl is not null && (baseUrl.Length > 2048 || !IsSafeBaseUrl(baseUrl))) ||
-            (modelName is not null && modelName.Length > 256))
+            (modelName is not null && modelName.Length > 256) ||
+            (tokensParameter is { Length: > 0 } && !System.Text.RegularExpressions.Regex.IsMatch(tokensParameter, @"\A[A-Za-z_][A-Za-z0-9_]{0,63}\z")) ||
+            tokensLimit is <= 0)
         {
             throw new ArgumentException("AI 配置提交字段无效。");
         }
@@ -556,6 +562,8 @@ public sealed class PortableLauncherUserClient : IDisposable
                 writer.WriteStartObject();
                 writer.WriteNumber("config_revision", configRevision);
                 writer.WriteString("config_id", configId);
+                if (tokensParameter is not null) writer.WriteString("AI_MAX_TOKENS_PARAM_NAME", tokensParameter);
+                if (tokensLimit is { } limit) writer.WriteNumber("AI_MAX_TOKENS_LIMIT", limit);
                 if (baseUrl is not null)
                 {
                     writer.WriteString("OPENAI_BASE_URL", baseUrl);
@@ -1241,7 +1249,13 @@ public sealed class PortableLauncherUserClient : IDisposable
             OptionalString(root, "config_source", 128),
             OptionalString(root, "effective_state", 128),
             OptionalBool(root, "IS_MULTI_USER_MODE"),
-            OptionalBool(root, "NEEDS_SETUP"));
+            OptionalBool(root, "NEEDS_SETUP"))
+        {
+            TokensParameter = OptionalString(root, "AI_MAX_TOKENS_PARAM_NAME", 64),
+            TokensLimit = !root.TryGetProperty("AI_MAX_TOKENS_LIMIT", out var limit) || limit.ValueKind == JsonValueKind.Null ||
+                (limit.ValueKind == JsonValueKind.String && limit.GetString() == "")
+                ? null : RequireInt(root, "AI_MAX_TOKENS_LIMIT", 1, int.MaxValue),
+        };
     }
 
     private static LauncherAiHealthSnapshot ParseAiHealthSnapshot(JsonElement root)

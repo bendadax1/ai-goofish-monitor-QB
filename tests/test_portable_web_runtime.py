@@ -10,9 +10,10 @@ import textwrap
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.portable.maintenance import DatabaseProbeResult, validate_database_target
@@ -25,6 +26,7 @@ from src.portable.web_runtime import (
     build_settings,
     create_application,
     portable_scheduler_start_allowed,
+    _SetupBrowserGrants,
 )
 
 
@@ -66,9 +68,12 @@ class PortableWebRuntimeTests(unittest.TestCase):
         program_root = root / "app"
         (program_root / "templates").mkdir(parents=True, exist_ok=True)
         (program_root / "static" / "portable").mkdir(parents=True, exist_ok=True)
-        (program_root / "templates" / "portable_setup.html").write_text("<form></form>", encoding="utf-8")
+        for template in ("login.html", "portable_setup.html"):
+            (program_root / "templates" / template).write_bytes((_REPOSITORY_ROOT / "templates" / template).read_bytes())
         (program_root / "static" / "portable" / "setup.css").write_text("", encoding="utf-8")
         (program_root / "static" / "portable" / "setup.js").write_text("", encoding="utf-8")
+        (program_root / "static" / "js").mkdir(parents=True, exist_ok=True)
+        (program_root / "static" / "js" / "account_policy.js").write_bytes((_REPOSITORY_ROOT / "static/js/account_policy.js").read_bytes())
         return PortableWebSettings(
             instance_id="portable-web-test",
             program_root=program_root,
@@ -161,6 +166,108 @@ class PortableWebRuntimeTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.headers["cache-control"], "no-store")
                 self.assertIn("default-src 'none'", response.headers["content-security-policy"])
+                self.assertIn("默认管理员账号", response.text)
+                self.assertIn("至少 8 位，允许纯数字", response.text)
+                self.assertIn("data-account-policy=", response.text)
+                self.assertEqual(client.get("/setup-assets/account-policy.js", headers=host_headers).status_code, 200)
+                self.assertEqual(client.get("/static/js/account_policy.js", headers=host_headers).status_code, 503)
+                self.assertNotIn('id="setup-token"', response.text)
+                self.assertNotIn('id="username"', response.text)
+                self.assertNotIn("fonts.googleapis.com", response.text)
+                self.assertNotIn('id="loginForm"', response.text)
+                self.assertNotIn(_SETUP_TOKEN, response.text)
+                self.assertIn("nonce-", response.headers["content-security-policy"])
+                self.assertEqual(client.get("/api/tasks", headers=host_headers).status_code, 503)
+                self.assertEqual(client.get("/images/private.png", headers=host_headers).status_code, 503)
+                self.assertEqual(client.get("/login", headers=host_headers, follow_redirects=False).headers["location"], "/setup")
+
+    def test_browser_setup_requires_launcher_ticket_and_creates_only_admin(self):
+        with self.temporary_directory() as temporary_directory:
+            state = {"has_user": False, "calls": []}
+            def create_admin(_settings, username, password):
+                state["calls"].append((username, password))
+                state["has_user"] = True
+            settings = self._settings(Path(temporary_directory))
+            application = create_application(settings, probe=_CompatibleProbe(),
+                users_exist=lambda _: state["has_user"], create_admin=create_admin,
+                business_app_factory=self._business_app)
+            headers = {"Origin": settings.loopback_origin}
+            launcher = {"Authorization": f"Bearer {_SETUP_TOKEN}", "X-Goofish-Instance-Id": settings.instance_id}
+            with TestClient(application, base_url=settings.loopback_origin) as client:
+                self.assertEqual(client.post("/setup", headers=headers, json={"password": "GoodPassword1!"}).status_code, 401)
+                self.assertEqual(client.get("/setup/session").status_code, 401)
+                self.assertEqual(client.post("/internal/setup-ticket").status_code, 401)
+                self.assertEqual(client.post("/internal/setup-ticket", headers={**launcher, "Authorization": f"Bearer {_TOKEN}"}).status_code, 401)
+                self.assertEqual(client.post("/internal/setup-ticket", headers={**launcher, "Origin": settings.loopback_origin}).status_code, 403)
+                self.assertEqual(client.post("/internal/setup-ticket", headers={**launcher, "X-Goofish-Instance-Id": "wrong"}).status_code, 403)
+                issued = client.post("/internal/setup-ticket", headers=launcher)
+                self.assertEqual(issued.status_code, 200)
+                self.assertEqual(issued.headers["cache-control"], "no-store")
+                ticket = issued.json()["ticket"]
+                self.assertNotIn(ticket, client.get("/setup").text)
+                self.assertEqual(client.post("/setup/authorize", json={"ticket": ticket}).status_code, 403)
+                self.assertEqual(client.post("/setup/authorize", headers={"Origin": "http://127.0.0.1:8001"}, json={"ticket": ticket}).status_code, 403)
+                granted = client.post("/setup/authorize", headers=headers, json={"ticket": ticket})
+                self.assertEqual(granted.status_code, 200)
+                self.assertIn("HttpOnly", granted.headers["set-cookie"])
+                self.assertIn("SameSite=strict", granted.headers["set-cookie"])
+                self.assertIn("Path=/setup", granted.headers["set-cookie"])
+                self.assertNotIn("Max-Age", granted.headers["set-cookie"])
+                self.assertNotIn("expires=", granted.headers["set-cookie"].lower())
+                self.assertNotIn(_SETUP_TOKEN, granted.text + granted.headers["set-cookie"])
+                self.assertEqual(client.post("/setup/authorize", headers=headers, json={"ticket": ticket}).status_code, 401)
+                self.assertEqual(client.get("/setup/session").status_code, 200)
+                self.assertEqual(client.get("/setup").status_code, 200)  # Refresh keeps authorization.
+                self.assertEqual(client.post("/setup", headers=headers, json={"username": "other", "password": "GoodPassword1!"}).status_code, 422)
+                response = client.post("/setup", headers=headers, json={"password": "GoodPassword1!"})
+                self.assertEqual(response.status_code, 201)
+                self.assertIn("Max-Age=0", response.headers["set-cookie"])
+                self.assertEqual(state["calls"], [("admin", "GoodPassword1!")])
+                self.assertEqual(client.get("/setup/session").status_code, 401)
+                self.assertEqual(client.post("/internal/setup-ticket", headers=launcher).status_code, 409)
+                self.assertEqual(client.post("/setup", headers=headers, json={"password": "DifferentPassword2!"}).status_code, 409)
+                self.assertEqual(client.get("/setup", follow_redirects=False).headers["location"], "/login")
+
+    def test_ticket_expires_but_browser_session_lasts_until_setup_or_restart(self):
+        with patch("src.portable.web_runtime.time.monotonic", return_value=100) as clock:
+            grants = _SetupBrowserGrants()
+            ticket = grants.issue_ticket()
+            self.assertNotIn(ticket, repr(grants.tickets))
+            clock.return_value = 161
+            self.assertIsNone(grants.exchange(ticket))
+            session = grants.exchange(grants.issue_ticket())
+            self.assertTrue(grants.authorized(session))
+            self.assertFalse(_SetupBrowserGrants().authorized(session))
+            self.assertNotIn(session, repr(grants.sessions))
+            clock.return_value = 100_000
+            self.assertTrue(grants.authorized(session))
+            self.assertEqual(grants.exchange(grants.issue_ticket(), session), session)
+            for _ in range(7):
+                grants.exchange(grants.issue_ticket())
+            with self.assertRaises(HTTPException) as rejected:
+                grants.exchange(grants.issue_ticket())
+            self.assertEqual(rejected.exception.status_code, 429)
+            self.assertTrue(grants.authorized(session))
+            self.assertEqual(grants.exchange(grants.issue_ticket(), session), session)
+            self.assertEqual(len(grants.sessions), 8)
+            for _ in range(12):
+                grants.issue_ticket()
+            self.assertLessEqual(len(grants.tickets), 8)
+            grants.clear()
+            self.assertFalse(grants.tickets or grants.sessions)
+            self.assertFalse(grants.authorized(session))
+
+    def test_existing_users_never_get_bootstrap_or_default_account(self):
+        with self.temporary_directory() as temporary_directory:
+            settings = self._settings(Path(temporary_directory), setup_token="")
+            calls = []
+            app = create_application(settings, probe=_CompatibleProbe(), users_exist=lambda _: True,
+                create_admin=lambda *args: calls.append(args), business_app_factory=self._business_app)
+            with TestClient(app, base_url=settings.loopback_origin) as client:
+                self.assertEqual(client.post("/internal/setup-ticket").status_code, 409)
+                self.assertEqual(client.get("/setup", follow_redirects=False).headers["location"], "/login")
+                self.assertEqual(client.post("/setup", headers={"Origin": settings.loopback_origin}, json={"password": "GoodPassword1!"}).status_code, 409)
+            self.assertEqual(calls, [])
 
     def test_setup_requires_exact_loopback_json_token_and_closes_after_persisted_admin(self):
         with self.temporary_directory() as temporary_directory:

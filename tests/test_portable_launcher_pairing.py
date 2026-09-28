@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from fastapi import HTTPException
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -354,6 +354,39 @@ class LauncherPairingRegistryTests(unittest.TestCase):
             )
             self.assertEqual(exchanged.status_code, 200)
             self.assertTrue(exchanged.json()["access_token"].startswith("l1."))
+
+    def test_ai_tokens_route_uses_authenticated_user_and_existing_cas_service(self):
+        app = FastAPI()
+        app.include_router(pairing_module.router)
+        user = {"user_id": "user-1", "username": "alice"}
+        settings = {"AI_MAX_TOKENS_PARAM_NAME": "max_completion_tokens", "AI_MAX_TOKENS_LIMIT": 8192,
+                    "OPENAI_API_KEY": "never-return-secret", "PROXY_URL": "private", "ENABLE_THINKING": True}
+        saved = {"config_id": "config-a", "config_revision": 8, "OPENAI_API_KEY": "never-return-secret"}
+        with patch.object(pairing_module, "_launcher_user", return_value=user), \
+             patch("src.web.settings_manager._require_ai_access"), \
+             patch("src.web.settings_manager._require_ai_or_tasks_access"), \
+             patch("src.web.settings_manager.get_ai_settings", new_callable=AsyncMock, return_value=settings) as read, \
+             patch("src.web.settings_manager.update_ai_settings", new_callable=AsyncMock, return_value=saved) as update, \
+             TestClient(app) as client:
+            response = client.get("/api/launcher/ai")
+            self.assertEqual(response.json(), {key: settings[key] for key in ("AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT")})
+            read.assert_awaited_once_with(user)
+            payload = {"config_id": "config-a", "config_revision": 7,
+                       "AI_MAX_TOKENS_PARAM_NAME": "max_completion_tokens", "AI_MAX_TOKENS_LIMIT": 8192}
+            response = client.put("/api/launcher/ai", json=payload)
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("OPENAI_API_KEY", response.json())
+            update.assert_awaited_once_with(payload, user)
+            for field, value in (("AI_MAX_TOKENS_LIMIT", True), ("AI_MAX_TOKENS_LIMIT", 0),
+                                 ("AI_MAX_TOKENS_LIMIT", "8192"), ("AI_MAX_TOKENS_LIMIT", 2147483648),
+                                 ("AI_MAX_TOKENS_PARAM_NAME", "bad field"), ("AI_MAX_TOKENS_PARAM_NAME", "x" * 65),
+                                 ("AI_MAX_TOKENS_PARAM_NAME", "valid\n"), ("AI_MAX_TOKENS_PARAM_NAME", None)):
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(client.put("/api/launcher/ai", json={**payload, field: value}).status_code, 422)
+            self.assertEqual(update.await_count, 1)
+            for forbidden in ("ENABLE_THINKING", "ENABLE_RESPONSE_FORMAT", "AI_VISION_ENABLED", "user_id"):
+                self.assertEqual(client.put("/api/launcher/ai", json={**payload, forbidden: True}).status_code, 422)
+            self.assertEqual(update.await_count, 1)
 
     def test_browser_approval_page_displays_scope_and_requires_explicit_post(self):
         app = FastAPI()

@@ -238,13 +238,15 @@ def _run_child(case: str) -> None:
             raise AssertionError("injected first-admin failure was not converted")
         assert engine.rolled_back and not engine.committed
 
-        for password in ("short-A1!", "alllowercase1!", "密" * 22 + "Aa1!xyz"):
+        for password in ("1234567", "", "密" * 22 + "Aa1!xyz"):
             try:
                 schema._validate_first_admin("portable_admin", password)
             except schema.FirstAdminError:
                 pass
             else:
                 raise AssertionError("unsafe password was accepted")
+        for password in ("12345678", "alllowercase", "密" * 8):
+            assert schema._validate_first_admin("admin", password) == ("admin", password)
     else:
         raise ValueError("unknown isolated case")
 

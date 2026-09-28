@@ -62,16 +62,22 @@ internal static class BundleManifestCases
             restoredAcl.SetSecurityDescriptorBinaryForm(originalAcl, AccessControlSections.Access);
             info.SetAccessControl(restoredAcl);
         }
-        File.WriteAllText(Path.Combine(root, "app", fixture.AppId, "web_server.py"), "WEB", new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(root, "app", "web_server.py"), "WEB", new UTF8Encoding(false));
         await Expect(root, StartupFailureKind.InvalidData, StartupFileRole.BundleFile);
     }
 
     public static async Task TestWindowsPathsAndCompleteManifestAsync(ProcessTestWorkspace workspace)
     {
         var fixture = BundleFixture.Create(workspace.CreateCaseRoot("bundle-windows-paths"), windowsPaths: true);
-        fixture.AddManifestFile("createdump.exe", "fixture of the manifest-covered .NET runtime helper");
+        fixture.AddManifestFile("launcher/createdump.exe", "fixture of the manifest-covered .NET runtime helper");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "data"));
+        File.WriteAllText(Path.Combine(fixture.Root, "data", "state.txt"), "user state", new UTF8Encoding(false));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "backups"));
+        File.WriteAllText(Path.Combine(fixture.Root, "backups", "backup.txt"), "user backup", new UTF8Encoding(false));
         var descriptor = await PortableBundleDescriptor.LoadAndVerifyAsync(fixture.Root);
-        Assert(descriptor.ProgramRoot == Path.Combine(fixture.Root, "app", fixture.AppId), "Windows 转义路径必须解析到 app 组件");
+        Assert(descriptor.ProgramRoot == Path.Combine(fixture.Root, "app"), "Windows 转义路径必须解析到 app 组件");
+        Assert(descriptor.LauncherExecutable == Path.Combine(fixture.Root, "launcher", "AiGoofish.Launcher.App.exe"),
+            "Launcher 应从独立组件目录加载");
         Assert(fixture.Files.Any(path => path == "THIRD_PARTY_LICENSE_GAPS.md"), "根 notice 必须纳入 manifest");
         Assert(fixture.Files.Any(path => path.StartsWith("third-party-notices/", StringComparison.Ordinal)), "第三方 notices 目录必须纳入 manifest");
     }
@@ -189,24 +195,26 @@ internal static class BundleManifestCases
                 release_status = "preview-integration",
                 release_id = "test-release",
                 platform = "windows-x64",
-                app = new { exact_id = appId, relative_dir = CurrentPath($"app/{appId}", windowsPaths), version = "1.0.0", schema_min = 1, schema_max = 1 },
-                runtime = new { exact_id = runtimeId, relative_dir = CurrentPath($"runtime/{runtimeId}", windowsPaths) },
-                browser = new { exact_id = browserId, relative_dir = CurrentPath($"browsers/{browserId}", windowsPaths) },
-                postgres = new { exact_id = postgresId, relative_dir = CurrentPath($"postgres/{postgresId}", windowsPaths) },
-                launcher = new { exact_id = "launcher-test", relative_dir = ".", executable = "AiGoofish.Launcher.App.exe" },
+                app = new { exact_id = appId, relative_dir = CurrentPath("app", windowsPaths), version = "1.0.0", schema_min = 1, schema_max = 1 },
+                runtime = new { exact_id = runtimeId, relative_dir = CurrentPath("runtime", windowsPaths) },
+                browser = new { exact_id = browserId, relative_dir = CurrentPath("browsers", windowsPaths) },
+                postgres = new { exact_id = postgresId, relative_dir = CurrentPath("postgres", windowsPaths) },
+                launcher = new { exact_id = "launcher-test", relative_dir = "launcher", executable = "AiGoofish.Launcher.App.exe" },
             };
             var fixture = new BundleFixture(root, appId, current, windowsPaths, new List<string>());
-            fixture.WriteFile("AiGoofish.Launcher.App.exe", "launcher");
-            fixture.WriteFile("AiGoofish.Launcher.App.dll", "launcher library");
-            fixture.WriteFile($"app/{appId}/scripts/portable/python-bootstrap.py", "bootstrap");
-            fixture.WriteFile($"app/{appId}/web_server.py", "web");
-            fixture.WriteFile($"runtime/{runtimeId}/python.exe", "python");
-            fixture.WriteFile($"runtime/{runtimeId}/python313.dll", "python dll");
-            fixture.WriteFile($"runtime/{runtimeId}/python313.zip", "python stdlib");
-            fixture.WriteFile($"runtime/{runtimeId}/python-runtime-manifest.json", "{}");
-            fixture.WriteFile($"browsers/{browserId}/chrome-win64/chrome.exe", "chrome");
-            fixture.WriteFile($"browsers/{browserId}/browser-runtime-manifest.json", "{}");
-            fixture.WriteFile($"postgres/{postgresId}/bin/postgres.exe", "postgres");
+            fixture.WriteFile("AiGoofish.exe", "root launch entry");
+            fixture.WriteFile("uninstall.exe", "root uninstall entry");
+            fixture.WriteFile("launcher/AiGoofish.Launcher.App.exe", "launcher");
+            fixture.WriteFile("launcher/AiGoofish.Launcher.App.dll", "launcher library");
+            fixture.WriteFile("app/scripts/portable/python-bootstrap.py", "bootstrap");
+            fixture.WriteFile("app/web_server.py", "web");
+            fixture.WriteFile("runtime/python.exe", "python");
+            fixture.WriteFile("runtime/python313.dll", "python dll");
+            fixture.WriteFile("runtime/python313.zip", "python stdlib");
+            fixture.WriteFile("runtime/python-runtime-manifest.json", "{}");
+            fixture.WriteFile("browsers/chrome-win64/chrome.exe", "chrome");
+            fixture.WriteFile("browsers/browser-runtime-manifest.json", "{}");
+            fixture.WriteFile("postgres/bin/postgres.exe", "postgres");
             fixture.WriteFile("THIRD_PARTY_LICENSE_GAPS.md", "preview gaps");
             fixture.WriteFile("third-party-notices/inventory.json", "{}");
             fixture.WriteFile("third-party-notices/python/LICENSE.txt", "license");

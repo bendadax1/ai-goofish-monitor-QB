@@ -1,57 +1,33 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>首次设置 · 闲鱼监控与 AI 推荐</title>
-  <link rel="stylesheet" href="/setup-assets/setup.css">
-  <script src="/setup-assets/setup.js" defer></script>
-</head>
-<body>
-  <main class="setup-shell">
-    <header>
-      <p class="eyebrow">闲鱼监控与 AI 推荐 · Windows 便携版</p>
-      <h1>创建你的管理员账户</h1>
-      <p class="intro">服务已准备好。完成这一步后，即可进入本机管理界面。</p>
-    </header>
-    <section class="card" aria-labelledby="account-title">
-      <div class="card-heading"><span class="step" aria-hidden="true">1</span><h2 id="account-title">首次安全设置</h2></div>
-      <p class="hint">仅用于这个实例，没有共享默认账户。平台登录和 AI 配置将在进入管理界面后单独完成。</p>
-      <div id="summary" class="summary" role="alert" tabindex="-1" hidden></div>
-      <form id="setup-form" novalidate>
-        <div class="field">
-          <label for="setup-token">一次性设置码</label>
-          <input id="setup-token" name="setup_token" type="password" autocomplete="off" spellcheck="false" required maxlength="256" aria-describedby="token-hint token-error">
-          <p id="token-hint" class="hint">从 Launcher 的首次设置引导中复制。设置码不是你的登录密码。</p>
-          <p id="token-error" class="field-error" hidden></p>
-        </div>
-        <div class="field">
-          <label for="username">管理员用户名</label>
-          <input id="username" name="username" autocomplete="username" spellcheck="false" required minlength="3" maxlength="50" aria-describedby="username-hint username-error">
-          <p id="username-hint" class="hint">3–50 个字符，开头和末尾不要留空格。</p>
-          <p id="username-error" class="field-error" hidden></p>
-        </div>
-        <div class="field">
-          <label for="password">登录密码</label>
-          <input id="password" name="password" type="password" autocomplete="new-password" required aria-describedby="password-hint password-error">
-          <p id="password-hint" class="hint">12–72 个 UTF-8 字节，包含大写字母、小写字母、数字和符号。支持粘贴及密码管理器。</p>
-          <p id="password-error" class="field-error" hidden></p>
-        </div>
-        <div class="field">
-          <label for="confirm">确认密码</label>
-          <input id="confirm" type="password" autocomplete="new-password" required aria-describedby="confirm-error">
-          <p id="confirm-error" class="field-error" hidden></p>
-        </div>
-        <button id="submit" type="submit">创建管理员账户</button>
-        <p id="status" class="status" role="status" aria-live="polite"></p>
-      </form>
-      <div id="success" hidden tabindex="-1">
-        <h2>账户已创建</h2><p>设置通道已关闭。请使用刚创建的账户登录。</p>
-        <a class="primary-link" href="/login">进入登录页面</a>
-      </div>
-      <noscript><p class="summary">此页面需要 JavaScript 提交安全设置。请在浏览器中启用 JavaScript，再刷新页面。</p></noscript>
-    </section>
-    <footer>仅连接本机服务 · 不发送 AI 请求 · 不保存设置码草稿</footer>
-  </main>
-</body>
-</html>
+{% extends "login.html" %}
+{% block title %}欢迎使用 - 咸鱼智能监控机器人{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="/setup-assets/setup.css">
+<script src="/setup-assets/account-policy.js" defer></script>
+<script src="/setup-assets/setup.js" defer></script>
+{% endblock %}
+{% block subtitle %}首次使用，设置密码即可开始{% endblock %}
+{% block form %}
+<form class="login-form" id="setup-form" novalidate>
+    <div class="setup-intro">
+        <h2>欢迎使用</h2>
+        <p>默认管理员账号为 <strong>admin</strong>。<br>设置一个登录密码，就可以开始了。</p>
+    </div>
+    <div id="summary" class="error-message" role="alert" tabindex="-1" hidden></div>
+    <div class="form-group">
+        <label for="password">设置密码</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" placeholder="设置你的专属密码" required aria-describedby="password-hint password-error" disabled>
+        <p id="password-hint" class="setup-hint">{{ account_policy.passwordHint }}</p>
+        <p id="password-error" class="field-error" hidden></p>
+    </div>
+    <div class="form-group">
+        <label for="confirm">确认密码</label>
+        <input id="confirm" type="password" autocomplete="new-password" placeholder="再输入一次密码" required aria-describedby="confirm-error" disabled>
+        <p id="confirm-error" class="field-error" hidden></p>
+    </div>
+    <button id="submit" class="submit-btn" type="submit" disabled>设置密码并进入</button>
+    <p id="status" class="setup-hint setup-status" role="status" aria-live="polite">正在连接启动器授权…</p>
+    <a id="login-link" class="setup-login-link" href="/login" hidden>前往登录</a>
+    <noscript><p class="field-error">请启用 JavaScript 后，从启动器重新打开管理页。</p></noscript>
+</form>
+{% endblock %}
+{% block scripts %}{% endblock %}

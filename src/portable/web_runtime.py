@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
 from sqlalchemy.pool import NullPool
@@ -40,6 +42,7 @@ from src.portable.maintenance import (
     validate_database_target,
 )
 from src.version import VERSION
+from src.account_policy import browser_account_policy
 
 
 PROTOCOL_VERSION = 1
@@ -51,6 +54,7 @@ SETUP_MAX_BODY_BYTES = 4_096
 SETUP_BODY_TIMEOUT_SECONDS = 5.0
 SETUP_ATTEMPT_LIMIT = 5
 SETUP_ATTEMPT_WINDOW_SECONDS = 60.0
+SETUP_TICKET_SECONDS = 60
 DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 30.0
 
 _INSTANCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -453,7 +457,7 @@ def _create_first_admin(settings: PortableWebSettings, username: str, password: 
             engine.dispose()
 
 
-async def _read_limited_json(request: Request) -> dict[str, Any]:
+async def _read_limited_json(request: Request, *, fields: tuple[str, ...] | None = None) -> dict[str, Any]:
     content_type = request.headers.get("content-type", "")
     if content_type.split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(status_code=415, detail="setup requires application/json")
@@ -488,9 +492,10 @@ async def _read_limited_json(request: Request) -> dict[str, Any]:
         value = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         raise HTTPException(status_code=400, detail="invalid setup JSON") from None
-    if not isinstance(value, dict) or set(value) != {"username", "password", "setup_token"}:
+    shapes = [set(fields)] if fields is not None else [{"username", "password", "setup_token"}, {"password"}]
+    if not isinstance(value, dict) or set(value) not in shapes:
         raise HTTPException(status_code=422, detail="setup request fields are invalid")
-    if not all(isinstance(value[name], str) for name in ("username", "password", "setup_token")):
+    if not all(isinstance(item, str) for item in value.values()):
         raise HTTPException(status_code=422, detail="setup request fields are invalid")
     return value
 
@@ -509,6 +514,50 @@ class _SetupRateLimiter:
                 return False
             self._attempts.append(now)
             return True
+
+
+class _SetupBrowserGrants:
+    """Process-local, bounded grants; methods contain no awaits, so exchange is atomic."""
+
+    def __init__(self) -> None:
+        self.tickets: dict[str, float] = {}
+        self.sessions: dict[str, float] = {}
+
+    @staticmethod
+    def _key(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def _issue(self, store: dict[str, float], seconds: int | None) -> str:
+        now = time.monotonic()
+        for key, expiry in list(store.items()):
+            if expiry <= now:
+                del store[key]
+        while len(store) >= 8:
+            del store[next(iter(store))]
+        value = secrets.token_urlsafe(32)
+        store[self._key(value)] = now + seconds if seconds is not None else float("inf")
+        return value
+
+    def issue_ticket(self) -> str:
+        return self._issue(self.tickets, SETUP_TICKET_SECONDS)
+
+    def exchange(self, ticket: str, existing_session: str = "") -> str | None:
+        expiry = self.tickets.pop(self._key(ticket), 0)
+        if expiry <= time.monotonic():
+            return None
+        if self.authorized(existing_session):
+            return existing_session
+        # Never evict a browser while its user is filling in the password.
+        if len(self.sessions) >= 8:
+            raise HTTPException(status_code=429, detail="too many setup browser sessions")
+        return self._issue(self.sessions, None)
+
+    def authorized(self, cookie: str) -> bool:
+        return self.sessions.get(self._key(cookie), 0) > time.monotonic()
+
+    def clear(self) -> None:
+        self.tickets.clear()
+        self.sessions.clear()
 
 
 def _launcher_authenticated(authorization: str | None, token: str) -> bool:
@@ -542,7 +591,7 @@ def _host_is_valid(request: Request, settings: PortableWebSettings) -> bool:
 _SETUP_RESPONSE_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
-        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
@@ -682,6 +731,14 @@ def create_application(
     outer = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=normal_lifespan)
     outer.add_middleware(_DrainRequestTrackingMiddleware, coordinator=coordinator)
     limiter = _SetupRateLimiter()
+    exchange_limiter = _SetupRateLimiter()
+    browser_grants = _SetupBrowserGrants()
+    setup_cookie = "goofish_setup_" + hashlib.sha256(settings.instance_id.encode("utf-8")).hexdigest()[:16]
+    setup_images = {
+        "/images/login-bg.png": ("images", "login-bg.png"),
+        "/images/logo/logo 128x128.png": ("images", "logo", "logo 128x128.png"),
+        "/images/logo/favicon 32x32.png": ("images", "logo", "favicon 32x32.png"),
+    }
 
     @outer.middleware("http")
     async def setup_gate(request: Request, call_next):
@@ -697,17 +754,22 @@ def create_application(
         if gate.setup_required and request.url.path not in {
             "/health", "/internal/ready", "/internal/shutdown",
             "/internal/cancel-shutdown", "/internal/shutdown-state", "/setup",
+            "/internal/setup-ticket", "/setup/authorize", "/setup/session",
         }:
-            if request.url.path == "/":
+            if request.url.path in {"/", "/login"}:
                 return RedirectResponse(url="/setup", status_code=303, headers=_SETUP_RESPONSE_HEADERS)
-            if request.url.path in {"/setup-assets/setup.css", "/setup-assets/setup.js"}:
+            if request.url.path in {"/setup-assets/setup.css", "/setup-assets/setup.js", "/setup-assets/account-policy.js", *setup_images}:
                 return await call_next(request)
             return JSONResponse(
                 status_code=503,
                 content={"detail": "first-admin setup is required"},
                 headers={"Retry-After": "1"},
             )
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith("/setup") or request.url.path == "/internal/setup-ticket":
+            for name, value in _SETUP_RESPONSE_HEADERS.items():
+                response.headers.setdefault(name, value)
+        return response
 
     @outer.get("/health")
     async def health() -> dict[str, str]:
@@ -717,7 +779,62 @@ def create_application(
     async def setup_page():
         if not gate.setup_required:
             return RedirectResponse(url="/login", status_code=303, headers=_SETUP_RESPONSE_HEADERS)
-        return _setup_asset(settings, ("templates", "portable_setup.html"), "text/html; charset=utf-8")
+        nonce = secrets.token_urlsafe(24)
+        try:
+            templates = Environment(loader=FileSystemLoader(settings.program_root / "templates"), autoescape=select_autoescape())
+            content = templates.get_template("portable_setup.html").render(
+                portable_setup=True, csp_nonce=nonce, version=settings.app_version,
+                account_policy=browser_account_policy(),
+                storage_mode_label="Windows 便携版", storage_mode_desc="本机运行 · 无需 Docker",
+                db_status_level="ok", db_status_label="服务已就绪", db_status_desc="设置密码即可开始",
+            )
+        except Exception:
+            logger.error("Portable setup template is unavailable", extra={"event": "portable_setup_template_unavailable"})
+            raise HTTPException(status_code=500, detail="portable setup page is unavailable") from None
+        headers = dict(_SETUP_RESPONSE_HEADERS)
+        headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace("style-src 'self'", f"style-src 'self' 'nonce-{nonce}'")
+        return HTMLResponse(content, headers=headers)
+
+    async def setup_image(request: Request):
+        return _setup_asset(settings, setup_images[request.url.path], "image/png")
+
+    for image_path in setup_images:
+        outer.add_api_route(image_path, setup_image, methods=["GET"], include_in_schema=False)
+
+    @outer.post("/internal/setup-ticket")
+    async def setup_ticket(request: Request):
+        # Deliberately requires the setup credential, NOT the control credential.
+        if not gate.setup_required:
+            raise HTTPException(status_code=409, detail="first-admin setup is already complete")
+        if not _launcher_authenticated(request.headers.get("authorization"), settings.setup_token):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        if request.headers.get("x-goofish-instance-id") != settings.instance_id or "origin" in request.headers:
+            raise HTTPException(status_code=403, detail="setup context mismatch")
+        return JSONResponse({"ticket": browser_grants.issue_ticket()}, headers=_SETUP_RESPONSE_HEADERS)
+
+    @outer.post("/setup/authorize")
+    async def setup_authorize(request: Request):
+        if not _setup_request_origin_is_valid(request, settings):
+            raise HTTPException(status_code=403, detail="setup origin is not allowed")
+        if not gate.setup_required:
+            raise HTTPException(status_code=409, detail="first-admin setup is already complete")
+        if not await exchange_limiter.permit():
+            raise HTTPException(status_code=429, detail="setup attempt limit exceeded", headers={"Retry-After": "60"})
+        payload = await _read_limited_json(request, fields=("ticket",))
+        session = browser_grants.exchange(payload["ticket"], request.cookies.get(setup_cookie, ""))
+        if session is None:
+            raise HTTPException(status_code=401, detail="setup authorization expired")
+        response = JSONResponse({"authorized": True}, headers=_SETUP_RESPONSE_HEADERS)
+        # Plain HTTP is loopback-only; port-specific Host and exact Origin are checked.
+        # Browser-session cookie; server-side authorization ends on setup or process exit.
+        response.set_cookie(setup_cookie, session, httponly=True, samesite="strict", path="/setup")
+        return response
+
+    @outer.get("/setup/session")
+    async def setup_session(request: Request):
+        if not gate.setup_required or not browser_grants.authorized(request.cookies.get(setup_cookie, "")):
+            raise HTTPException(status_code=401, detail="setup authorization expired")
+        return JSONResponse({"authorized": True}, headers=_SETUP_RESPONSE_HEADERS)
 
     @outer.get("/setup-assets/setup.css")
     async def setup_css():
@@ -726,6 +843,10 @@ def create_application(
     @outer.get("/setup-assets/setup.js")
     async def setup_js():
         return _setup_asset(settings, ("static", "portable", "setup.js"), "application/javascript; charset=utf-8")
+
+    @outer.get("/setup-assets/account-policy.js")
+    async def account_policy_js():
+        return _setup_asset(settings, ("static", "js", "account_policy.js"), "application/javascript; charset=utf-8")
 
     @outer.get("/internal/ready")
     async def ready(
@@ -805,7 +926,12 @@ def create_application(
         if not await limiter.permit():
             raise HTTPException(status_code=429, detail="setup attempt limit exceeded", headers={"Retry-After": "60"})
         payload = await _read_limited_json(request)
-        if not _setup_authenticated(payload["setup_token"], settings.setup_token):
+        browser_setup = set(payload) == {"password"}
+        authenticated = (
+            browser_grants.authorized(request.cookies.get(setup_cookie, "")) if browser_setup
+            else _setup_authenticated(payload["setup_token"], settings.setup_token)
+        )
+        if not authenticated:
             raise HTTPException(status_code=401, detail="unauthorized")
         async with gate.setup_lock:
             if not gate.setup_required:
@@ -815,8 +941,9 @@ def create_application(
                 # this host started.  Recheck before any second transaction.
                 if await asyncio.to_thread(users_exist, settings):
                     gate.setup_required = False
+                    browser_grants.clear()
                     raise HTTPException(status_code=409, detail="first-admin setup is already complete")
-                await asyncio.to_thread(create_admin, settings, payload["username"], payload["password"])
+                await asyncio.to_thread(create_admin, settings, "admin" if browser_setup else payload["username"], payload["password"])
                 persisted = await asyncio.to_thread(users_exist, settings)
                 if not persisted:
                     raise PortableWebStartupError("first-admin state did not persist")
@@ -829,6 +956,7 @@ def create_application(
                 logger.warning("Portable first-admin setup failed", extra={"event": "portable_setup_failed"})
                 raise HTTPException(status_code=422, detail="first-admin setup failed") from None
             gate.setup_required = False
+            browser_grants.clear()
             if business_after_setup is not None:
                 try:
                     await business_after_setup()
@@ -841,7 +969,9 @@ def create_application(
                         "Portable scheduler start after first-admin setup failed",
                         extra={"event": "portable_setup_scheduler_start_failed"},
                     )
-        return JSONResponse(status_code=201, content={"status": "first_admin_created"})
+        response = JSONResponse(status_code=201, content={"status": "first_admin_created"}, headers=_SETUP_RESPONSE_HEADERS)
+        response.delete_cookie(setup_cookie, path="/setup", httponly=True, samesite="strict")
+        return response
 
     from src.portable.launcher_pairing import register_internal_routes
     register_internal_routes(outer, settings)

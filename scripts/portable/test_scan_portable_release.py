@@ -33,8 +33,9 @@ class PortableReleaseScannerTests(unittest.TestCase):
             parent.rmdir()
 
     def write_bundle(self, files=None, *, inventory=None):
-        files = dict(files or {"app/fixture/readme.txt": b"preview\n", "runtime/python/python.exe": b"py",
-                               "browsers/chromium/chrome.exe": b"chrome", "postgres/bin/postgres.exe": b"pg"})
+        files = dict(files or {"app/readme.txt": b"preview\n", "launcher/AiGoofish.Launcher.App.exe": b"launcher",
+                               "runtime/python.exe": b"py",
+                               "browsers/chrome.exe": b"chrome", "postgres/bin/postgres.exe": b"pg"})
         notice = inventory if inventory is not None else self.valid_notice_inventory()
         for entry in notice.get("components", []):
             if not isinstance(entry, dict):
@@ -48,9 +49,9 @@ class PortableReleaseScannerTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
             entries.append({"path": relative, "size": len(content), "sha256": hashlib.sha256(content).hexdigest()})
-        current = {"format_version": 1, "app": {"relative_dir": "app/fixture"},
-                   "runtime": {"relative_dir": "runtime/python"}, "browser": {"relative_dir": "browsers/chromium"},
-                   "postgres": {"relative_dir": "postgres"}, "launcher": {"relative_dir": "."}}
+        current = {"format_version": 1, "app": {"relative_dir": "app"},
+                   "runtime": {"relative_dir": "runtime"}, "browser": {"relative_dir": "browsers"},
+                   "postgres": {"relative_dir": "postgres"}, "launcher": {"relative_dir": "launcher"}}
         (self.root / "current.json").write_text(json.dumps(current), encoding="utf-8")
         notice_path = self.root / "third-party-notices" / "inventory.json"
         notice_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,19 +98,27 @@ class PortableReleaseScannerTests(unittest.TestCase):
 
     def test_missing_and_changed_files_are_reported(self):
         self.write_bundle()
-        (self.root / "app/fixture/readme.txt").write_bytes(b"changed")
+        (self.root / "app/readme.txt").write_bytes(b"changed")
         (self.root / "third-party-notices/inventory.json").unlink()
         codes = {item["code"] for item in scanner.scan(self.root)["findings"]}
         self.assertTrue({"manifest-mismatch", "missing-file", "license-inventory-missing"}.issubset(codes))
 
     def test_sensitive_data_bom_and_data_directory_are_reported(self):
         self.write_bundle()
-        (self.root / "app/fixture/.env").write_text("x=y", encoding="utf-8")
+        (self.root / "app/.env").write_text("x=y", encoding="utf-8")
         state = self.root / "state" / "snapshot.json"
         state.parent.mkdir()
         state.write_bytes(b"\xef\xbb\xbf{}")
         codes = {item["code"] for item in scanner.scan(self.root)["findings"]}
         self.assertTrue({"sensitive-file", "user-data-path", "bom", "unknown-file"}.issubset(codes))
+
+    def test_flat_app_directory_still_rejects_user_data(self):
+        self.write_bundle()
+        state = self.root / "app" / "state" / "snapshot.json"
+        state.parent.mkdir()
+        state.write_bytes(b"{}")
+        codes = {item["code"] for item in scanner.scan(self.root)["findings"]}
+        self.assertIn("user-data-path", codes)
 
     def test_license_gaps_block_preview(self):
         self.write_bundle(inventory={"format_version": 1, "notice_complete": False,
@@ -155,7 +164,7 @@ class PortableReleaseScannerTests(unittest.TestCase):
     def test_chromium_notice_cannot_be_redirected_to_an_application_file(self):
         inventory = self.valid_notice_inventory()
         chromium = next(item for item in inventory["components"] if item["component"] == "chromium")
-        chromium["file"] = "app/fixture/readme.txt"
+        chromium["file"] = "app/readme.txt"
         chromium["sha256"] = hashlib.sha256(b"preview\n").hexdigest()
         self.write_bundle(inventory=inventory)
         codes = {item["code"] for item in scanner.scan(self.root)["findings"]}
@@ -189,11 +198,12 @@ class PortableReleaseScannerTests(unittest.TestCase):
             scanner.scan(self.root)
 
     def test_only_exact_hash_locked_third_party_notice_can_use_legacy_encoding(self):
-        relative = "postgres/postgresql-17.11-3-windows-x64/commandlinetools_3rd_party_licenses.txt"
+        relative = "postgres/commandlinetools_3rd_party_licenses.txt"
         legacy_notice = b"copyright \x81 legacy"
         digest = hashlib.sha256(legacy_notice).hexdigest()
-        self.write_bundle(files={"app/fixture/readme.txt": b"preview\n", "runtime/python/python.exe": b"py",
-                                 "browsers/chromium/chrome.exe": b"chrome", "postgres/bin/postgres.exe": b"pg",
+        self.write_bundle(files={"app/readme.txt": b"preview\n",
+                                 "launcher/AiGoofish.Launcher.App.exe": b"launcher", "runtime/python.exe": b"py",
+                                 "browsers/chrome.exe": b"chrome", "postgres/bin/postgres.exe": b"pg",
                                  relative: legacy_notice})
         with patch.dict(scanner._PINNED_LEGACY_NOTICE_HASHES, {relative: digest}):
             self.assertEqual("PASS", scanner.scan(self.root)["status"])

@@ -12,6 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.schedulers.base import STATE_PAUSED
 
 from src.version import VERSION
+from src.account_policy import browser_account_policy
 from src.web.auth import (
     AuthenticatedStaticFiles, 
     require_auth, 
@@ -422,7 +423,7 @@ async def read_root(request: Request):
         if not user:
             return RedirectResponse(url="/login", status_code=302)
     
-    return templates.TemplateResponse(request, "index.html", {"version": VERSION})
+    return templates.TemplateResponse(request, "index.html", {"version": VERSION, "account_policy": browser_account_policy()})
 
 
 @app.get("/auth/status")

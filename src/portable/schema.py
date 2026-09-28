@@ -23,6 +23,7 @@ from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.engine import Connection, Engine, URL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import NullPool
+from src.account_policy import validate_new_password, validate_username
 
 from src.portable.maintenance import validate_database_target
 from src.portable.seeds import (
@@ -50,7 +51,6 @@ ADMIN_DATABASE_ENVIRONMENT_VARIABLE = "GOOFISH_PORTABLE_ADMIN_DATABASE_URL"
 SCHEMA_ADVISORY_LOCK_KEY = 0x27474F4F46495348
 
 _ROLE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
-_USERNAME_CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 _RESERVED_ROLE_NAMES = frozenset({"current_role", "current_user", "none", "public", "session_user"})
 _PERMISSION_CATEGORIES = ("tasks", "results", "accounts", "notify", "ai", "admin")
 _SUPER_ADMIN_GROUP = {
@@ -486,26 +486,10 @@ def _assert_compatible_schema(connection: Connection) -> None:
 
 
 def _validate_first_admin(username: str, password: str) -> tuple[str, str]:
-    if username != username.strip() or not 3 <= len(username) <= 50:
-        raise FirstAdminError("first-admin username must be 3 to 50 characters without outer whitespace")
-    if _USERNAME_CONTROL_PATTERN.search(username):
-        raise FirstAdminError("first-admin username contains a control character")
     try:
-        password_bytes = password.encode("utf-8")
-    except (AttributeError, UnicodeEncodeError):
-        raise FirstAdminError("first-admin password is invalid") from None
-    if not 12 <= len(password_bytes) <= 72:
-        raise FirstAdminError("first-admin password must be 12 to 72 UTF-8 bytes")
-    if not all(
-        (
-            any(character.islower() for character in password),
-            any(character.isupper() for character in password),
-            any(character.isdigit() for character in password),
-            any(not character.isalnum() for character in password),
-        )
-    ):
-        raise FirstAdminError("first-admin password must include upper, lower, digit, and symbol characters")
-    return username, password
+        return validate_username(username), validate_new_password(password)
+    except ValueError as exc:
+        raise FirstAdminError(str(exc)) from None
 
 
 def create_first_admin(

@@ -35,6 +35,8 @@
 
   <ItemGroup>
     <AvaloniaResource Include="..\..\..\images\logo\favicon 32x32.png" Link="Assets\launcher-tray.png" />
-    <AvaloniaResource Include="Assets\market-banner.png" />
+    <AvaloniaResource Include="..\..\..\images\logo\logo 128x128.png" Link="Assets\brand-logo.png" />
+    <AvaloniaResource Include="..\..\..\images\login-bg.png" Link="Assets\brand-background.png" />
+    <EmbeddedResource Include="UninstallHelper.ps1" LogicalName="PortableUninstallHelper" />
   </ItemGroup>
 </Project>

@@ -3,7 +3,7 @@
   "platform": "windows-x64",
   "release_status": "preview-integration",
   "launcher": {
-    "relative_dir": ".",
+    "relative_dir": "launcher",
     "executable": "AiGoofish.Launcher.App.exe"
   },
   "app": {

@@ -269,7 +269,7 @@ def _source_files(source_root: Path) -> list[PlannedFile]:
                 continue
             if relative not in tracked and not (
                 relative.startswith("src/portable/") and candidate.suffix == ".py"
-                or relative in {"src/runtime_paths.py", "src/log_retention.py", "templates/portable_setup.html", "static/portable/setup.js", "static/portable/setup.css"}
+                or relative in {"src/runtime_paths.py", "src/log_retention.py", "src/account_policy.py", "src/web/account_models.py", "static/js/account_policy.js", "templates/portable_setup.html", "static/portable/setup.js", "static/portable/setup.css"}
             ):
                 raise BundleError("untracked program asset requires an explicit build allow-list entry")
             if candidate.name.startswith(".") or candidate.suffix.lower() in {".log", ".bak", ".zip", ".tmp", ".env"}:
@@ -338,8 +338,25 @@ def _launcher_files(source: Path, receipt: Path) -> list[PlannedFile]:
     for item in inventory:
         if item["path"].casefold() in reserved:
             raise BundleError("Launcher publish input collides with bundle metadata")
-    return [PlannedFile(source / item["path"], item["path"], item["size"], item["sha256"])
+    return [PlannedFile(source / item["path"], f"launcher/{item['path']}", item["size"], item["sha256"])
             for item in inventory]
+
+
+def _root_launch_entry(apphost: Path) -> PlannedFile:
+    """Point a second copy of the SDK-produced apphost at the managed DLL in launcher/."""
+    try:
+        image = apphost.read_bytes()
+    except OSError as exc:
+        raise BundleError("Launcher apphost could not be read") from exc
+    original = b"AiGoofish.Launcher.App.dll"
+    target = b"launcher\\AiGoofish.Launcher.App.dll"
+    if not image.startswith(b"MZ") or image.count(original) != 1:
+        raise BundleError("Launcher apphost does not contain the expected application path")
+    offset = image.index(original)
+    if image[offset + len(original):offset + len(target)] != bytes(len(target) - len(original)):
+        raise BundleError("Launcher apphost path slot cannot hold the root entry target")
+    patched = image[:offset] + target + image[offset + len(target):]
+    return PlannedFile(None, "AiGoofish.exe", len(patched), hashlib.sha256(patched).hexdigest(), content=patched)
 
 
 def _validate_required_notice_components(components: Any) -> None:
@@ -560,14 +577,17 @@ def plan_bundle(release_id: str, source_root: Path = _ROOT, launcher_root: Path 
         "release_status": "preview-integration",
         "release_id": release_id,
         "platform": "windows-x64",
-        "app": {"exact_id": app_id, "relative_dir": f"app/{app_id}", "version": app_version, "schema_min": 1, "schema_max": 1},
-        "runtime": {"exact_id": python_id, "relative_dir": f"runtime/{python_id}"},
-        "browser": {"exact_id": browser_id, "relative_dir": f"browsers/{browser_id}"},
-        "postgres": {"exact_id": postgres_id, "relative_dir": f"postgres/{postgres_id}"},
-        "launcher": {"exact_id": _component_id(launcher_root), "relative_dir": ".", "executable": layout["launcher"]["executable"]},
+        "app": {"exact_id": app_id, "relative_dir": "app", "version": app_version, "schema_min": 1, "schema_max": 1},
+        "runtime": {"exact_id": python_id, "relative_dir": "runtime"},
+        "browser": {"exact_id": browser_id, "relative_dir": "browsers"},
+        "postgres": {"exact_id": postgres_id, "relative_dir": "postgres"},
+        "launcher": {"exact_id": _component_id(launcher_root), "relative_dir": "launcher", "executable": layout["launcher"]["executable"]},
     }
     files = [PlannedFile(item.source, f"{current['app']['relative_dir']}/{item.destination}", item.size, item.sha256, item.head_blob, item.content) for item in source_files]
     files.extend(launcher_files)
+    root_entry = _root_launch_entry(launcher_executable)
+    files.append(root_entry)
+    files.append(PlannedFile(None, "uninstall.exe", root_entry.size, root_entry.sha256, content=root_entry.content))
     files.extend(_tree_files(python_root, current["runtime"]["relative_dir"]))
     files.extend(_tree_files(browser_root, current["browser"]["relative_dir"]))
     files.extend(_tree_files(postgres_root, current["postgres"]["relative_dir"]))

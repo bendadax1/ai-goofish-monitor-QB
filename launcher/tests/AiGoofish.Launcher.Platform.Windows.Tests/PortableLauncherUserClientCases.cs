@@ -548,6 +548,48 @@ internal static class PortableLauncherUserClientCases
         Assert(handler.RequestCount == 7, "no-op 与首次创建都应各自刷新权威配置且不重试");
     }
 
+    public static async Task TestAdvancedTokensAsync(ProcessTestWorkspace workspace)
+    {
+        var handler = new QueueHandler(
+            _ => Json(HttpStatusCode.OK, PairingResponse("tokens-pair", "ABCD1234EFGH")),
+            _ => Json(HttpStatusCode.OK, ExchangedResponse()),
+            request =>
+            {
+                AssertUserRequest(request, "/api/launcher/ai");
+                var body = ReadBody(request);
+                Assert(body.GetProperty("AI_MAX_TOKENS_PARAM_NAME").GetString() == "max_completion_tokens" &&
+                    body.GetProperty("AI_MAX_TOKENS_LIMIT").GetInt32() == 8192 &&
+                    body.GetProperty("config_revision").GetInt32() == 7 && !body.TryGetProperty("OPENAI_API_KEY", out _),
+                    "高级参数保存须保留 CAS 并省略未变更密钥");
+                return Json(HttpStatusCode.OK, new { config_id = "cfg-token", config_revision = 8 });
+            },
+            _ => Json(HttpStatusCode.OK, new { config_id = "cfg-token", config_revision = 8,
+                AI_MAX_TOKENS_PARAM_NAME = "max_completion_tokens", AI_MAX_TOKENS_LIMIT = 8192 }),
+            request =>
+            {
+                var body = ReadBody(request);
+                Assert(!body.TryGetProperty("AI_MAX_TOKENS_PARAM_NAME", out _) && !body.TryGetProperty("AI_MAX_TOKENS_LIMIT", out _),
+                    "未修改高级参数时不得发送默认值覆盖用户配置");
+                return Json(HttpStatusCode.OK, new { config_id = "cfg-token", config_revision = 9 });
+            },
+            _ => Json(HttpStatusCode.OK, new { config_id = "cfg-token", config_revision = 9, AI_MAX_TOKENS_LIMIT = "" }),
+            _ => Json(HttpStatusCode.OK, new { config_id = "cfg-token", config_revision = 9, AI_MAX_TOKENS_LIMIT = "bad" }));
+        using var client = new PortableLauncherUserClient(CreateContext(), handler);
+        await client.BeginPairingAsync();
+        await client.ExchangePairingOnceAsync();
+        var saved = await client.SaveAiConfigurationAsync(7, "cfg-token", null, null, null,
+            tokensParameter: "max_completion_tokens", tokensLimit: 8192);
+        Assert(saved.TokensParameter == "max_completion_tokens" && saved.TokensLimit == 8192, "读取权威高级参数");
+        var empty = await client.SaveAiConfigurationAsync(8, "cfg-token", null, "model", null);
+        Assert(empty.TokensLimit is null, "旧配置空字符串表示未设置");
+        try
+        {
+            await client.GetAiConfigurationAsync();
+            throw new InvalidOperationException("非空非法 tokens 响应必须拒绝");
+        }
+        catch (LauncherUserClientException) { }
+    }
+
     public static async Task TestAiConfigurationRejectsEmptyIdWithPositiveRevisionAsync(ProcessTestWorkspace _)
     {
         var handler = new QueueHandler(

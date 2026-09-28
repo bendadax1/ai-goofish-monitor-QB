@@ -381,7 +381,7 @@ def _check_real_sessions(port, database, app, app_password, root, raw_secrets):
 def _check_real_web(port, database, app, app_password, probe, probe_password, root, raw_secrets):
     environment = {name: os.environ[name] for name in ("COMSPEC", "PATH", "SYSTEMROOT", "WINDIR") if name in os.environ}
     control, setup, master, signing = (secrets.token_urlsafe(32) for _ in range(4))
-    raw_secrets.extend((control, setup, master, signing, "WebFixturePassword7!"))
+    raw_secrets.extend((control, setup, master, signing, "87654321", "98765432", "23456789"))
     environment.update({
         "GOOFISH_PORTABLE_MODE": "portable",
         "GOOFISH_PORTABLE_PROGRAM_ROOT": str(root / "web-app"),
@@ -411,7 +411,7 @@ def _schema_program_fixture(test_root):
     if program.exists():
         return program
     sources = (
-        "portable_schema.py", "src/__init__.py", "src/version.py", "src/logging_config.py", "src/log_formatters.py",
+        "portable_schema.py", "src/__init__.py", "src/version.py", "src/logging_config.py", "src/log_formatters.py", "src/account_policy.py",
         "src/portable/__init__.py", "src/portable/schema.py", "src/portable/seeds.py", "src/portable/maintenance.py",
         "src/storage/__init__.py", "src/storage/models.py",
     )

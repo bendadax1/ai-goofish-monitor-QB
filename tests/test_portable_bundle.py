@@ -104,6 +104,29 @@ class PortableBundleTests(unittest.TestCase):
                 self.assertFalse(receipt.is_relative_to(publish))
                 self.assertFalse(receipt.read_bytes().startswith(b"\xef\xbb\xbf"))
 
+                with patch.object(builder, "_ROOT", repository):
+                    packaged = builder._launcher_files(publish, receipt)
+                self.assertEqual([entry.destination for entry in packaged], [
+                    "launcher/AiGoofish.Launcher.App.exe",
+                    "launcher/AiGoofish.Launcher.App.runtimeconfig.json",
+                    "launcher/nested/runtime.dll",
+                ])
+
+    def test_root_launch_entry_retargets_the_existing_apphost(self):
+        parent = ROOT / ".tmp" / "tests" / "portable-layout-r12"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as temporary:
+            source = Path(temporary) / "AiGoofish.Launcher.App.exe"
+            source.write_bytes(b"MZ" + b"AiGoofish.Launcher.App.dll" + bytes(100))
+            entry = builder._root_launch_entry(source)
+            self.assertEqual(entry.destination, "AiGoofish.exe")
+            self.assertIn(b"launcher\\AiGoofish.Launcher.App.dll", entry.content)
+            self.assertEqual(entry.size, len(entry.content))
+            self.assertEqual(entry.sha256, hashlib.sha256(entry.content).hexdigest())
+            source.write_bytes(b"MZ" + b"other.dll" + bytes(100))
+            with self.assertRaises(builder.BundleError):
+                builder._root_launch_entry(source)
+
     def test_fresh_launcher_inventory_rejects_settings_and_other_added_files(self):
         parent = ROOT / ".tmp" / "tests"
         for added_name in ("settings.json", "user-attachment.bin"):
@@ -304,6 +327,8 @@ class PortableBundleTests(unittest.TestCase):
         paths = {item.destination for item in files}
         self.assertIn("scripts/portable/python-bootstrap.py", paths)
         self.assertIn("src/log_retention.py", paths)
+        for path in ("src/account_policy.py", "src/web/account_models.py", "static/js/account_policy.js"):
+            self.assertIn(path, paths)
         self.assertIn("License", paths)
         self.assertIn("defaults/prompts/base_prompt.txt", paths)
         self.assertIn("defaults/prompts/bayes/bayes_v1.json", paths)

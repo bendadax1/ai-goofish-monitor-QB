@@ -237,10 +237,7 @@ internal static class HostRecoveryAcceptance
             PumpUntil(() => vm.ServiceState is "组件运行中" or "已有实例恢复被拒绝" or "发行包不可用",
                 TimeSpan.FromSeconds(50), "新窗口恢复未结束");
             Assert(vm.ServiceState == "组件运行中", $"新窗口未显示 Running：{vm.ServiceState} / {vm.PhaseMessage}");
-            Assert(vm.SetupRequired && vm.CanCopySetupToken, "新窗口未恢复首次设置提示/复制入口。");
-            var token = vm.GetSetupTokenForExplicitCopy() ?? throw new IOException("新窗口缺少设置口令。");
-            Assert(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))) == receipt.SetupTokenSha256,
-                "新窗口恢复的设置口令不同于旧进程。");
+            Assert(vm.SetupRequired && vm.CanOpenSetup, "新窗口未恢复首次设置提示/打开入口。");
             Assert(vm.IsStopEnabled && vm.PrimaryButtonText == "打开管理页", "新窗口未显示运行控制。");
             AssertLiveIdentity(receipt.Postgres);
             AssertLiveIdentity(receipt.Python);

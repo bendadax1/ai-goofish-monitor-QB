@@ -28,6 +28,7 @@ from .utils import (
     encrypt_sensitive, decrypt_sensitive
 )
 from src.config import PORTABLE_MODE, WEB_USERNAME, WEB_PASSWORD
+from src.account_policy import validate_new_password, validate_username
 
 
 class ApiConfigRevisionConflict(Exception):
@@ -563,6 +564,10 @@ class PostgresAdapter(StorageInterface):
     
     def create_user(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """创建新用户"""
+        user_data = dict(user_data)
+        validate_username(user_data.get('username'))
+        if 'password' in user_data:
+            validate_new_password(user_data['password'])
         with self.get_session() as session:
             self._ensure_system_groups(session)
             # 密码加密
@@ -578,6 +583,11 @@ class PostgresAdapter(StorageInterface):
     
     def update_user(self, user_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """更新用户信息"""
+        updates = dict(updates)
+        if 'username' in updates:
+            validate_username(updates['username'])
+        if 'password' in updates:
+            validate_new_password(updates['password'])
         with self.get_session() as session:
             user = session.query(User).filter(User.id == user_id).first()
             if not user:

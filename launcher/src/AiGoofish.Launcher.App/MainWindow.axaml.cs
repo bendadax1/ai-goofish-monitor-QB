@@ -21,6 +21,9 @@ public sealed partial class MainWindow : Window
     internal Func<Window, TextBox, Button, Button, Task>? DiagnosticPreviewShownForAcceptance { get; set; }
     internal Func<Task<string?>>? DiagnosticFolderSelectionForAcceptance { get; set; }
     internal Action<LauncherDiagnosticPreviewTicket>? DiagnosticPreviewTicketDisposedForAcceptance { get; set; }
+    internal Action<Window, TextBox, Button, Button>? LogPreviewShownForAcceptance { get; set; }
+    internal Func<Task<string?>>? LogFolderSelectionForAcceptance { get; set; }
+    internal Action? LogExportCompletedForAcceptance { get; set; }
 
     public MainWindow()
         : this(isSimulation: false)
@@ -51,6 +54,10 @@ public sealed partial class MainWindow : Window
             _viewModel.SelectPage(page);
         }
     }
+
+    private void OnActivityViewClick(object? sender, RoutedEventArgs e) => _viewModel.SelectLogView(activity: true);
+
+    private void OnRawLogViewClick(object? sender, RoutedEventArgs e) => _viewModel.SelectLogView(activity: false);
 
     private async void OnClosing(object? sender, WindowClosingEventArgs e)
     {
@@ -225,6 +232,68 @@ public sealed partial class MainWindow : Window
 
     private void OnOpenLogsClick(object? sender, RoutedEventArgs e) => _viewModel.OpenLogFolder();
 
+    private void OnPauseLogsClick(object? sender, RoutedEventArgs e) => _viewModel.LogView.IsPaused = !_viewModel.LogView.IsPaused;
+
+    private async void OnSwitchBusinessAccountClick(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!_viewModel.BusinessConnection.CanLogout) return;
+            if (_viewModel.BusinessConnection.HasUnsavedChanges && !await ConfirmDiscardBusinessDraftsAsync(changingAccount: true)) return;
+            await _viewModel.LogoutBusinessUserAsync();
+            await _viewModel.BeginBusinessPairingAsync();
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError($"切换 Launcher 账号失败；异常类型：{exception.GetType().Name}");
+        }
+    }
+
+    private async void OnExportLogViewClick(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Capture before opening a dialog: incoming events cannot change the approved bytes.
+            var snapshot = _viewModel.LogView.CreateExportPreview(_viewModel.IsActivityView);
+            var cancel = new Button { Content = "取消", IsCancel = true };
+            var save = new Button { Content = "选择目录并导出" };
+            var previewText = new TextBox { Text = snapshot, IsReadOnly = true, AcceptsReturn = true, FontFamily = "Consolas" };
+            ScrollViewer.SetVerticalScrollBarVisibility(previewText, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+            ScrollViewer.SetHorizontalScrollBarVisibility(previewText, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+            Grid.SetRow(previewText, 1);
+            var buttons = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Spacing = 10, Children = { cancel, save } };
+            Grid.SetRow(buttons, 2);
+            var dialog = new Window
+            {
+                Title = "导出当前日志视图", Width = 720, Height = 520, MinWidth = 520, MinHeight = 360,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Content = new Grid { Margin = new Thickness(20), RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 12,
+                    Children = { new TextBlock { Text = "仅导出当前筛选/暂停视图，不是全部历史日志。内容可能包含本机路径与运行信息，请核对后保存；不会上传或删除原日志。", TextWrapping = Avalonia.Media.TextWrapping.Wrap }, previewText, buttons } },
+            };
+            cancel.Click += (_, _) => dialog.Close(false);
+            save.Click += (_, _) => dialog.Close(true);
+            var accepted = dialog.ShowDialog<bool>(this);
+            LogPreviewShownForAcceptance?.Invoke(dialog, previewText, cancel, save);
+            if (!await accepted) return;
+            string? directory;
+            if (LogFolderSelectionForAcceptance is { } selection) directory = await selection();
+            else
+            {
+                var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "选择日志视图保存目录", AllowMultiple = false });
+                directory = folders.FirstOrDefault()?.Path is { IsFile: true } uri ? uri.LocalPath : null;
+            }
+            if (string.IsNullOrWhiteSpace(directory)) return;
+            await LauncherLogViewModel.SaveNewExportAsync(directory, snapshot);
+            _viewModel.LogView.Status = "当前视图已保存到所选目录；未删除原日志。";
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError($"导出日志视图失败；异常类型：{exception.GetType().Name}");
+            _viewModel.LogView.Status = "导出失败，请检查目录权限或缩小筛选范围；未覆盖已有文件。";
+        }
+        finally { LogExportCompletedForAcceptance?.Invoke(); }
+    }
+
     private async void OnDiagnosticClick(object? sender, RoutedEventArgs e)
     {
         if (!_viewModel.CanExportDiagnostic)
@@ -359,7 +428,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<bool> ConfirmDiscardBusinessDraftsAsync()
+    private async Task<bool> ConfirmDiscardBusinessDraftsAsync(bool changingAccount = false)
     {
         var dialog = new Window
         {
@@ -376,7 +445,7 @@ public sealed partial class MainWindow : Window
                 {
                     new TextBlock
                     {
-                        Text = "你有尚未保存的 AI 连接修改。继续打开 Web 设置会清除 Launcher 中的模型、地址和密钥草稿。",
+                        Text = changingAccount ? "继续退出或切换账号会清除当前用户未保存的 AI 配置与密钥草稿。" : "继续打开 Web 设置会清除 Launcher 中未保存的 AI 配置与密钥草稿。",
                         TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                     },
                     new StackPanel
@@ -387,7 +456,7 @@ public sealed partial class MainWindow : Window
                         Children =
                         {
                             new Button { Content = "返回编辑", MinWidth = 100, IsCancel = true },
-                            new Button { Content = "放弃并打开 Web", MinWidth = 140, IsDefault = true },
+                            new Button { Content = changingAccount ? "放弃并继续" : "放弃并打开 Web", MinWidth = 140, IsDefault = true },
                         },
                     },
                 },
@@ -442,6 +511,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            if (_viewModel.BusinessConnection.HasUnsavedChanges && !await ConfirmDiscardBusinessDraftsAsync(changingAccount: true)) return;
             await _viewModel.LogoutBusinessUserAsync();
         }
         catch (Exception exception)
@@ -1085,25 +1155,6 @@ public sealed partial class MainWindow : Window
             dialog.Close(result);
         };
         return await dialog.ShowDialog<string?>(this) ?? result;
-    }
-
-    private async void OnCopySetupTokenClick(object? sender, RoutedEventArgs e)
-    {
-        var token = _viewModel.GetSetupTokenForExplicitCopy();
-        if (token is null || Clipboard is null)
-        {
-            return;
-        }
-
-        try
-        {
-            await Clipboard.SetTextAsync(token);
-            _viewModel.MarkSetupTokenCopied();
-        }
-        catch (Exception exception)
-        {
-            System.Diagnostics.Trace.TraceError($"复制一次性设置口令失败：{exception}");
-        }
     }
 
     private async void OnOpened(object? sender, EventArgs e)

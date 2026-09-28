@@ -45,7 +45,7 @@ CAS_FAILURE_DIAGNOSTIC_PATTERN = re.compile(
     rb"|^WEB_PORT_HOST_FIXTURE_RETAINED=YES$"
     rb"|^AUTO_PORT_UI_FAILURE stage=(?:preflight|first-auto-start|same-window-restart|fixed-conflict|existing-auto-conflict|all-stopped-reopen|all-stopped-shutdown|all-stopped-dispose|all-stopped-initialize|all-stopped-state|all-stopped-start|all-stopped-running|all-stopped-stop|all-stopped-final-state) category=(?:[A-Za-z]{1,64})$"
     rb"|^AUTO_PORT_UI_CLEANUP=(?:[A-Za-z]{1,64})$"
-    rb"|^AUTO_PORT_UI_RUNNING stage=(?:first-auto-start|same-window-restart|existing-auto-conflict|all-stopped-running) running=[01] setup=[01] stop=[01] copy=[01]$"
+    rb"|^AUTO_PORT_UI_RUNNING stage=(?:first-auto-start|same-window-restart|existing-auto-conflict|all-stopped-running) running=[01] setup=[01] stop=[01] (?:copy|setupEntry)=[01]$"
     rb"|^AUTO_PORT_UI_DIAG_STATE=(?:NotStarted|Starting|Recovering|Cancelling|Running|Failed|Stopping|BackingUp|Stopped|StopFailed)$"
     rb"|^AUTO_PORT_UI_DIAG_COMPONENT id=(?:postgres|database-provision|python-web) state=(?:Stopped|Starting|Running|Failed|Stopping|Unknown)$"
     rb"|^AUTO_PORT_UI_DIAG_EVENT component=(?:launcher|postgres|database-provision|python-web|python-maintenance) code=(?:STARTUP_COMPONENT_FAILED|COMPONENT_NOT_READY|COMPONENT_STOP_FAILED|COMPONENT_STOP_UNCONFIRMED|COMPONENT_STATE_READ_FAILED|POSTGRES_INIT_INTERRUPTED|POSTGRES_MARKER_MISSING|POSTGRES_DATA_UNVERIFIED|DATABASE_PROVISION_INTERRUPTED)$"

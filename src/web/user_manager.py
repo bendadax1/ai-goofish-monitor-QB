@@ -25,6 +25,7 @@ from src.config import WEB_USERNAME, WEB_PASSWORD, STORAGE_BACKEND
 from src.logging_config import get_logger
 from src.storage.utils import verify_password
 from src.portable.app_paths import get_portable_runtime_paths
+from .account_models import UserCreate, PasswordChange, UserPasswordReset
 
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -113,31 +114,11 @@ def _clear_reused_ntfy_token_on_server_change(existing_item: dict, update_payloa
 
 # ============== Pydantic 模型 ==============
 
-class UserCreate(BaseModel):
-    """创建用户请求"""
-    username: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=6)
-    email: Optional[str] = None
-    group_ids: List[str] = Field(default_factory=list)
-
-
 class UserUpdate(BaseModel):
     """更新用户请求"""
     email: Optional[str] = None
     is_active: Optional[bool] = None
     group_ids: Optional[List[str]] = None
-
-
-class PasswordChange(BaseModel):
-    """修改密码请求"""
-    old_password: str
-    new_password: str = Field(..., min_length=6)
-
-
-class UserPasswordReset(BaseModel):
-    """管理员重置用户密码请求"""
-    new_password: str = Field(..., min_length=6)
-    revoke_sessions: bool = True
 
 
 class ProfileUpdate(BaseModel):

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-account-policy='{{ account_policy|tojson }}'>
 
 <head>
     <meta charset="UTF-8">
@@ -1150,7 +1150,7 @@
                                 </div>
                                 <div class="profile-info-item">
                                     <label>密码 <span class="required-pill">必填</span></label>
-                                    <input type="password" id="new-user-password" placeholder="请输入密码（至少6位）" required>
+                                    <input type="password" id="new-user-password" placeholder="请输入密码（{{ account_policy.passwordHint }}）" required>
                                 </div>
                                 <div class="profile-info-item">
                                     <label>邮箱</label>
@@ -1231,6 +1231,7 @@
     <script src="/static/js/modules/tasks_editor.js"></script>
     <script src="/static/js/modules/reorder.js"></script>
     <script src="/static/js/modules/accounts_view.js"></script>
+    <script src="/static/js/account_policy.js"></script>
     <script src="/static/js/modules/users_view.js"></script>
     <script src="/static/js/modules/logs_view.js"></script>
     <script src="/static/js/modules/results_view.js"></script>

@@ -45,6 +45,7 @@ if (string.IsNullOrWhiteSpace(testBaseRoot) || !Path.IsPathFullyQualified(testBa
 var workspace = new ProcessTestWorkspace(testBaseRoot);
 var tests = new (string Name, Func<ProcessTestWorkspace, Task> Run)[]
 {
+    ("首次设置浏览器短时票据与地址边界", SetupBrowserCases.RunAsync),
     ("实例分配持久状态与初始化证据拒绝", InitializationStateCases.RunAsync),
     ("真实子进程启动与正常停止", TestStartAndStopAsync),
     ("启动确认期内早退", TestEarlyExitAsync),
@@ -106,6 +107,7 @@ var tests = new (string Name, Func<ProcessTestWorkspace, Task> Run)[]
     ("Launcher AI 密钥脱敏与配置 CAS 冲突", PortableLauncherUserClientCases.TestMaskedKeyAndCasConflictAsync),
     ("Launcher AI 首次配置创建并刷新权威值", PortableLauncherUserClientCases.TestAiConfigurationFirstSaveCreatesAndRefreshesAuthoritativeConfigAsync),
     ("Launcher AI 保存拒绝空 ID 搭配正 revision", PortableLauncherUserClientCases.TestAiConfigurationRejectsEmptyIdWithPositiveRevisionAsync),
+    ("Launcher 当前账号 tokens 高级参数协议", PortableLauncherUserClientCases.TestAdvancedTokensAsync),
     ("Launcher AI 保存拒绝已有配置身份不一致响应", PortableLauncherUserClientCases.TestAiConfigurationRejectsExistingIdentityMismatchAsync),
 };
 

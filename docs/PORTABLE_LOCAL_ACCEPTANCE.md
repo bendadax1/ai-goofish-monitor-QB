@@ -11,7 +11,7 @@
 - ZIP SHA-256：`9f01503a2570f4b121143646979461ec83fcd5a6c1e7871567434e6ee605b91d`
 - 清单 `current.json` 标记 `release_status: preview-integration`。这是集成验收预览候选，不是公开发布包；r1–r4 的执行步骤均为历史，不适用于 r5。
 
-先校验 ZIP 指纹，再把 ZIP **全部内容**解压到一个全新、可写、独立的目录。解压后确认最外层目录直接包含 `AiGoofish.Launcher.App.exe`、`current.json` 和包内其他组件。不要只复制 EXE，不要从压缩包预览中直接运行，也不要把文件覆盖到旧实例或带有 `data` 的目录中。
+先校验 ZIP 指纹，再把 ZIP **全部内容**解压到一个全新、可写、独立的目录。r5–r10 历史候选的 EXE 位于包根；r11 的 Launcher EXE 位于 `launcher/`；r15 新候选可从包根 `AiGoofish.exe` 启动，并有 `uninstall.exe`。这些历史包均以各自清单和说明为准。不要只复制 EXE，不要从压缩包预览中直接运行，也不要把文件覆盖到旧实例或带有 `data` 的目录中。
 
 在 PowerShell 中可核对 ZIP：
 

@@ -22,7 +22,9 @@ internal interface ILauncherBusinessUserClient : IDisposable
         string? modelName,
         string? replacementApiKey,
         bool removeApiKey = false,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? tokensParameter = null,
+        int? tokensLimit = null);
     Task<LauncherAiManualTestResult> RunManualAiTestAsync(
         bool explicitlyConfirmed,
         string requestId,
@@ -71,9 +73,11 @@ internal sealed class PortableLauncherBusinessUserClient : ILauncherBusinessUser
         string? modelName,
         string? replacementApiKey,
         bool removeApiKey = false,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        string? tokensParameter = null,
+        int? tokensLimit = null) =>
         _client.SaveAiConfigurationAsync(
-            configRevision, configId, baseUrl, modelName, replacementApiKey, removeApiKey, cancellationToken);
+            configRevision, configId, baseUrl, modelName, replacementApiKey, removeApiKey, cancellationToken, tokensParameter, tokensLimit);
 
     public Task<LauncherAiManualTestResult> RunManualAiTestAsync(
         bool explicitlyConfirmed,
@@ -107,6 +111,27 @@ internal sealed record LauncherManualAiTestPreview(
 
 public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
+    private string _tokensParameter = string.Empty;
+    private string _tokensLimit = string.Empty;
+    private bool _tokensDirty;
+    public string TokensParameter
+    {
+        get => _tokensParameter;
+        set { if (SetField(ref _tokensParameter, value ?? string.Empty)) OnAdvancedDraftChanged(); }
+    }
+    public string TokensLimit
+    {
+        get => _tokensLimit;
+        set { if (SetField(ref _tokensLimit, value ?? string.Empty)) OnAdvancedDraftChanged(); }
+    }
+    public bool HasAdvancedDraft => _tokensDirty;
+    private void OnAdvancedDraftChanged()
+    {
+        _tokensDirty = true;
+        ClearServerValidationError();
+        InvalidateAiActionCards();
+        NotifyActions();
+    }
     private static readonly TimeSpan PairingPollInterval = TimeSpan.FromSeconds(2);
     private readonly Func<CancellationToken, Task<ILauncherBusinessUserClient>> _clientFactory;
     private readonly Func<string, bool> _openExternal;
@@ -201,12 +226,12 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
     public bool CanCancelPairing => IsPairing;
     public bool CanLogout => _identity is not null && !IsSaving;
     public bool CanSave => HostReady && CanWriteAi && _configuration is not null && !IsSaving && !IsManualTestRunning && !IsHealthLoading &&
-        (_baseUrlDirty || _modelDirty || !string.IsNullOrEmpty(_apiKeyDraft) || _removeKeyRequested);
+        HasUnsavedChanges;
     public bool CanCheckConfiguration => HostReady && CanReadAi && _configuration is not null && !IsCheckingConfiguration && !IsSaving && !IsManualTestRunning;
     public bool CanRefreshAiHealth => HostReady && CanReadAi && _client is not null && !IsHealthLoading && !IsManualTestRunning;
     public bool CanReadAiHealth => CanRefreshAiHealth;
     public bool CanRunManualTest => HostReady && CanWriteAi && _configuration is not null && _client is not null &&
-        !IsPairing && !IsSaving && !IsManualTestRunning && !_manualTestRequiresConfigurationRefresh;
+        !IsPairing && !IsSaving && !IsManualTestRunning && !_manualTestRequiresConfigurationRefresh && !_tokensDirty;
     public bool CanCancelManualTest => IsManualTestRunning;
     public bool HasAiHealth => _aiHealth is not null;
     public bool HasManualTestResult => _manualTestResult is not null;
@@ -245,7 +270,7 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
     public string ManualTestLatency { get => _manualTestLatency; private set => SetField(ref _manualTestLatency, value); }
     public string ManualTestSource { get => _manualTestSource; private set => SetField(ref _manualTestSource, value); }
     public bool IsManualTestUnknown => _manualTestResult?.Status == "unknown";
-    public bool HasUnsavedChanges => _baseUrlDirty || _modelDirty || !string.IsNullOrEmpty(_apiKeyDraft) || _removeKeyRequested;
+    public bool HasUnsavedChanges => _baseUrlDirty || _modelDirty || !string.IsNullOrEmpty(_apiKeyDraft) || _removeKeyRequested || _tokensDirty;
     public bool RequiresBaseUrlTargetConfirmation => _configuration is not null && !_configuration.BaseUrlRedacted &&
         _baseUrlDirty && IsOriginChanged(_configuration.BaseUrl, BaseUrl);
     public string BaseUrlTargetSummary => Uri.TryCreate(BaseUrl, UriKind.Absolute, out var uri)
@@ -801,7 +826,9 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
                 _modelDirty ? ModelName : null,
                 string.IsNullOrEmpty(_apiKeyDraft) ? null : _apiKeyDraft,
                 removeApiKey: _removeKeyRequested,
-                cancellationToken);
+                cancellationToken,
+                tokensParameter: _tokensDirty ? TokensParameter : null,
+                tokensLimit: _tokensDirty ? int.Parse(TokensLimit) : null);
             ApplyConfiguration(config);
             Status = FormatEffectiveState(config.EffectiveState);
         }
@@ -1071,6 +1098,7 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
         _pairingPrompt = null;
         _identity = null;
         _configuration = null;
+        ResetAdvancedFields(null);
         IsPairing = false;
         PairingCode = string.Empty;
         PairingExpiry = string.Empty;
@@ -1098,6 +1126,7 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
         _manualTestRequiresConfigurationRefresh = false;
         InvalidateAiActionCards();
         _configuration = config;
+        ResetAdvancedFields(config);
         _baseUrl = config.BaseUrlRedacted ? string.Empty : config.BaseUrl ?? string.Empty;
         _modelName = config.ModelName ?? string.Empty;
         ApiKeyDraft = string.Empty;
@@ -1119,6 +1148,7 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
         current.ConfigId != latest.ConfigId || current.ConfigRevision != latest.ConfigRevision ||
         current.ApiKeySet != latest.ApiKeySet || current.BaseUrlRedacted != latest.BaseUrlRedacted ||
         current.BaseUrl != latest.BaseUrl || current.ModelName != latest.ModelName ||
+        current.TokensParameter != latest.TokensParameter || current.TokensLimit != latest.TokensLimit ||
         current.ConfigSource != latest.ConfigSource || current.EffectiveState != latest.EffectiveState;
 
     private void NotifyConfigurationState()
@@ -1138,8 +1168,19 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanRunManualTest));
     }
 
+    private void ResetAdvancedFields(LauncherAiConfiguration? config)
+    {
+        _tokensParameter = config?.TokensParameter ?? string.Empty;
+        _tokensLimit = config is null ? string.Empty : (config.TokensLimit ?? 20000).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _tokensDirty = false;
+        OnPropertyChanged(nameof(TokensParameter));
+        OnPropertyChanged(nameof(TokensLimit));
+        OnPropertyChanged(nameof(HasAdvancedDraft));
+    }
+
     private void NotifyActions()
     {
+        OnPropertyChanged(nameof(HasAdvancedDraft));
         OnPropertyChanged(nameof(CanBeginPairing));
         OnPropertyChanged(nameof(CanCancelPairing));
         OnPropertyChanged(nameof(CanLogout));
@@ -1163,6 +1204,12 @@ public sealed class LauncherBusinessConnectionViewModel : INotifyPropertyChanged
         if (_configuration is null)
         {
             return false;
+        }
+
+        if (_tokensDirty && ((TokensParameter.Length > 0 && !System.Text.RegularExpressions.Regex.IsMatch(TokensParameter, @"\A[A-Za-z_][A-Za-z0-9_]{0,63}\z")) ||
+            !int.TryParse(TokensLimit, out var parsedLimit) || parsedLimit <= 0))
+        {
+            ServerValidationError = "tokens 字段名须为字母/下划线开头，最多 64 位；输出上限须为正整数。";
         }
 
         if (_apiKeyDraft.Length > 4096)

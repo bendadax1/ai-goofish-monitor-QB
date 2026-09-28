@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN"{% if account_policy %} data-account-policy='{{ account_policy|tojson }}'{% endif %}>
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录 - 咸鱼智能监控机器人</title>
+    <title>{% block title %}登录 - 咸鱼智能监控机器人{% endblock %}</title>
     <link rel="icon" type="image/png" href="/images/logo/favicon 32x32.png">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
+    {% if not portable_setup %}<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">{% endif %}
+    <style{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
         * {
             margin: 0;
             padding: 0;
@@ -460,14 +460,15 @@
             }
         }
     </style>
+    {% block extra_head %}{% endblock %}
 </head>
 
 <body>
     <div class="login-container">
         <div class="login-header">
-            <img src="/images/logo/logo 128x128.png" alt="Logo" onerror="this.style.display='none'">
+            <img src="/images/logo/logo 128x128.png" alt="Logo" {% if not portable_setup %}onerror="this.style.display='none'"{% endif %}>
             <h1>咸鱼智能监控机器人</h1>
-            <p>管理后台登录</p>
+            <p>{% block subtitle %}管理后台登录{% endblock %}</p>
             <div class="status-row">
                 <div class="status-card">
                     <div class="status-title">{{ storage_mode_label }}</div>
@@ -480,6 +481,7 @@
             </div>
         </div>
 
+        {% block form %}
         <form class="login-form" id="loginForm" method="POST" action="/login">
             <div class="error-message" id="errorMessage"></div>
 
@@ -495,6 +497,7 @@
 
             <button type="submit" class="submit-btn" id="submitBtn">登 录</button>
         </form>
+        {% endblock %}
 
         {% if security_notice %}
         <div class="security-notice">{{ security_notice }}</div>
@@ -516,6 +519,7 @@
         </div>
     </div>
 
+    {% block scripts %}
     <script>
         const form = document.getElementById('loginForm');
         const errorMessage = document.getElementById('errorMessage');
@@ -576,6 +580,7 @@
             errorMessage.classList.add('show');
         }
     </script>
+    {% endblock %}
 </body>
 
 </html>

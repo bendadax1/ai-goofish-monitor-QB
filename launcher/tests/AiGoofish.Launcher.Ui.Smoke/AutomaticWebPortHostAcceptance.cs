@@ -383,14 +383,14 @@ internal static class AutomaticWebPortHostAcceptance
     private static void AssertRunning(MainWindowViewModel vm, string stage)
     {
         var running = vm.ServiceState == "组件运行中";
-        if (!running || !vm.SetupRequired || !vm.IsStopEnabled || !vm.CanCopySetupToken)
+        if (!running || !vm.SetupRequired || !vm.IsStopEnabled || !vm.CanOpenSetup)
         {
             Console.Error.WriteLine($"AUTO_PORT_UI_RUNNING stage={stage} running={(running ? 1 : 0)} " +
                 $"setup={(vm.SetupRequired ? 1 : 0)} stop={(vm.IsStopEnabled ? 1 : 0)} " +
-                $"copy={(vm.CanCopySetupToken ? 1 : 0)}");
+                $"setupEntry={(vm.CanOpenSetup ? 1 : 0)}");
             EmitSafeDiagnostic(vm);
         }
-        Assert(running && vm.SetupRequired && vm.IsStopEnabled && vm.CanCopySetupToken,
+        Assert(running && vm.SetupRequired && vm.IsStopEnabled && vm.CanOpenSetup,
             "Production view model did not reach initialized Ready state");
     }
 

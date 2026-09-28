@@ -6,29 +6,43 @@
     xmlns:local="using:AiGoofish.Launcher.App"
     Title="闲鱼监控与 AI 推荐 · Launcher"
     Width="1120" Height="760" MinWidth="920" MinHeight="640"
-    Background="#F7F8FA" Foreground="#202733"
+    Background="#FAF8F3" Foreground="#292638"
     FontFamily="Microsoft YaHei UI, Microsoft YaHei, Segoe UI" FontSize="14">
   <Window.Resources>
     <SolidColorBrush x:Key="LauncherSurfaceBrush" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="LauncherBorderBrush" Color="#E0E4E9" />
-    <SolidColorBrush x:Key="LauncherTextBrush" Color="#202733" />
-    <SolidColorBrush x:Key="LauncherMutedBrush" Color="#657181" />
-    <SolidColorBrush x:Key="LauncherPrimaryBrush" Color="#0875C1" />
-    <SolidColorBrush x:Key="LauncherPrimaryTintBrush" Color="#EAF4FC" />
+    <SolidColorBrush x:Key="LauncherBorderBrush" Color="#E9E4DB" />
+    <SolidColorBrush x:Key="LauncherTextBrush" Color="#292638" />
+    <SolidColorBrush x:Key="LauncherMutedBrush" Color="#777181" />
+    <SolidColorBrush x:Key="LauncherPrimaryBrush" Color="#6D4BE8" />
+    <SolidColorBrush x:Key="LauncherPrimaryTintBrush" Color="#F0EBFF" />
+    <LinearGradientBrush x:Key="LauncherActionBrush" StartPoint="0%,0%" EndPoint="100%,100%">
+      <GradientStop Color="#8B5CF6" Offset="0" />
+      <GradientStop Color="#4F46E5" Offset="1" />
+    </LinearGradientBrush>
     <StreamGeometry x:Key="playIcon">M 6,3 L 21,12 L 6,21 Z</StreamGeometry>
     <StreamGeometry x:Key="slidersIcon">M 3,6 H 21 M 3,12 H 21 M 3,18 H 21 M 8,3 V 9 M 16,9 V 15 M 10,15 V 21</StreamGeometry>
     <StreamGeometry x:Key="aiIcon">M 5,5 H 19 V 19 H 5 Z M 9,1 V 5 M 15,1 V 5 M 9,19 V 23 M 15,19 V 23 M 1,9 H 5 M 1,15 H 5 M 19,9 H 23 M 19,15 H 23 M 9,9 H 15 V 15 H 9 Z</StreamGeometry>
     <StreamGeometry x:Key="shieldIcon">M 12,2 L 21,6 V 12 C 21,17 17,21 12,23 C 7,21 3,17 3,12 V 6 Z M 12,7 V 15 M 8,11 H 16</StreamGeometry>
     <StreamGeometry x:Key="logsIcon">M 3,3 H 21 V 21 H 3 Z M 7,8 H 17 M 7,12 H 17 M 7,16 H 14</StreamGeometry>
-    <StreamGeometry x:Key="folderIcon">M 2,6 H 9 L 12,9 H 22 V 20 H 2 Z</StreamGeometry>
-    <StreamGeometry x:Key="arrowIcon">M 9,5 L 16,12 L 9,19</StreamGeometry>
   </Window.Resources>
   <Window.Styles>
+    <Style Selector="Border.action-footer">
+      <Setter Property="Background" Value="#FFFDFA" />
+      <Setter Property="BorderBrush" Value="{StaticResource LauncherBorderBrush}" />
+      <Setter Property="BorderThickness" Value="0,1,0,0" />
+      <Setter Property="Padding" Value="22,12" />
+    </Style>
+    <Style Selector="Border.action-footer.overview">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="26,18,26,24" />
+    </Style>
     <Style Selector="Border.card">
       <Setter Property="Background" Value="{StaticResource LauncherSurfaceBrush}" />
       <Setter Property="BorderBrush" Value="{StaticResource LauncherBorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="CornerRadius" Value="16" />
+      <Setter Property="BoxShadow" Value="0 3 12 0 #06000000" />
       <Setter Property="Padding" Value="20" />
     </Style>
     <Style Selector="TextBlock.section-title">
@@ -55,64 +69,60 @@
       <Setter Property="FontSize" Value="15" />
       <Setter Property="FontWeight" Value="Medium" />
       <Setter Property="Foreground" Value="#FFFFFF" />
-      <Setter Property="Background" Value="{StaticResource LauncherPrimaryBrush}" />
-      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Background" Value="{StaticResource LauncherActionBrush}" />
+      <Setter Property="CornerRadius" Value="12" />
     </Style>
     <Style Selector="Button.secondary">
       <Setter Property="MinHeight" Value="40" />
       <Setter Property="Padding" Value="16,8" />
       <Setter Property="FontSize" Value="13" />
-      <Setter Property="Foreground" Value="#3D4C5F" />
-      <Setter Property="Background" Value="#FFFFFF" />
-      <Setter Property="BorderBrush" Value="#D8DFE7" />
-      <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="7" />
-    </Style>
-    <Style Selector="Button.shortcut">
-      <Setter Property="MinHeight" Value="72" />
-      <Setter Property="Padding" Value="16,12" />
-      <Setter Property="HorizontalAlignment" Value="Stretch" />
-      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Foreground" Value="#514B61" />
       <Setter Property="Background" Value="#FFFFFF" />
       <Setter Property="BorderBrush" Value="{StaticResource LauncherBorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="CornerRadius" Value="10" />
     </Style>
-    <Style Selector="Button.secondary:pointerover, Button.shortcut:pointerover">
-      <Setter Property="Background" Value="#F1F7FC" />
-      <Setter Property="BorderBrush" Value="#9BBBD5" />
+    <Style Selector="Button.secondary:pointerover">
+      <Setter Property="Background" Value="#F5F1FF" />
+      <Setter Property="BorderBrush" Value="#C9B9F5" />
+    </Style>
+    <Style Selector="Button.log-tab.selected">
+      <Setter Property="Background" Value="{StaticResource LauncherPrimaryTintBrush}" />
+      <Setter Property="Foreground" Value="{StaticResource LauncherPrimaryBrush}" />
+      <Setter Property="BorderBrush" Value="#C9B9F5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="Button.nav">
-      <Setter Property="Height" Value="78" />
+      <Setter Property="Height" Value="72" />
       <Setter Property="Padding" Value="8" />
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Center" />
       <Setter Property="Background" Value="Transparent" />
-      <Setter Property="Foreground" Value="#657181" />
-      <Setter Property="BorderThickness" Value="3,0,0,0" />
+      <Setter Property="Foreground" Value="{StaticResource LauncherMutedBrush}" />
+      <Setter Property="BorderThickness" Value="0" />
       <Setter Property="BorderBrush" Value="Transparent" />
-      <Setter Property="CornerRadius" Value="7" />
+      <Setter Property="CornerRadius" Value="14" />
     </Style>
     <Style Selector="Button.nav:pointerover">
-      <Setter Property="Background" Value="#EEF2F6" />
+      <Setter Property="Background" Value="#F3EEE6" />
     </Style>
     <Style Selector="Button.nav.selected">
-      <Setter Property="Background" Value="#EAF4FC" />
-      <Setter Property="Foreground" Value="#086DB4" />
-      <Setter Property="BorderBrush" Value="#0875C1" />
+      <Setter Property="Background" Value="{StaticResource LauncherPrimaryTintBrush}" />
+      <Setter Property="Foreground" Value="#6441CF" />
+      <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="Path.nav-icon, Path.line-icon">
       <Setter Property="Width" Value="24" />
       <Setter Property="Height" Value="24" />
       <Setter Property="Stretch" Value="Uniform" />
-      <Setter Property="Stroke" Value="#5A697B" />
+      <Setter Property="Stroke" Value="#81768F" />
       <Setter Property="StrokeThickness" Value="1.6" />
       <Setter Property="StrokeLineCap" Value="Round" />
       <Setter Property="HorizontalAlignment" Value="Center" />
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
     <Style Selector="Button.nav.selected Path.nav-icon">
-      <Setter Property="Stroke" Value="#0875C1" />
+      <Setter Property="Stroke" Value="{StaticResource LauncherPrimaryBrush}" />
     </Style>
     <Style Selector="WrapPanel Button">
       <Setter Property="Margin" Value="0,0,8,8" />
@@ -127,22 +137,40 @@
     </Style>
     <Style Selector="Button:focus-visible">
       <Setter Property="BorderThickness" Value="2" />
-      <Setter Property="BorderBrush" Value="#0875C1" />
+      <Setter Property="BorderBrush" Value="{StaticResource LauncherPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#6D4BE8" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#5836C7" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.primary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#E7E0F4" />
+      <Setter Property="Foreground" Value="#766987" />
+    </Style>
+    <Style Selector="Button.nav.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#E8DFFF" />
+      <Setter Property="Foreground" Value="#6441CF" />
     </Style>
   </Window.Styles>
   <Grid ColumnDefinitions="106,*">
-    <Border Background="#F2F4F7" BorderBrush="#E4E8ED" BorderThickness="0,0,1,0">
+    <Border Background="#FFFCF5" BorderBrush="#EBE5D9" BorderThickness="0,0,1,0">
       <Grid RowDefinitions="Auto,*,Auto" Margin="7,20,7,16">
         <StackPanel Spacing="7" HorizontalAlignment="Center">
-          <Image Source="avares://AiGoofish.Launcher.App/Assets/launcher-tray.png" Width="32" Height="32" />
-          <TextBlock Text="闲鱼监控" FontSize="13" Foreground="#384758" />
+          <Border CornerRadius="15" ClipToBounds="True" Width="52" Height="52" BoxShadow="0 4 12 0 #1AD3A52E">
+            <Image x:Name="BrandLogo" Source="avares://AiGoofish.Launcher.App/Assets/brand-logo.png" />
+          </Border>
+          <TextBlock Text="闲鱼监控" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource LauncherTextBrush}" />
         </StackPanel>
         <StackPanel Grid.Row="1" Margin="0,30,0,0" Spacing="8">
 
-          <Button x:Name="OverviewNavigationButton" Classes="nav" Classes.selected="{Binding IsOverviewPage}" Tag="Overview" Click="OnNavigationClick" AutomationProperties.Name="一键启动">
+          <Button x:Name="OverviewNavigationButton" Classes="nav" Classes.selected="{Binding IsOverviewPage}" Tag="Overview" Click="OnNavigationClick" AutomationProperties.Name="首页">
             <StackPanel Spacing="9" HorizontalAlignment="Center">
               <Path Classes="nav-icon" Data="{StaticResource playIcon}" />
-              <TextBlock Text="一键启动" FontSize="13" HorizontalAlignment="Center" />
+              <TextBlock Text="首页" FontSize="13" HorizontalAlignment="Center" />
             </StackPanel>
           </Button>
 
@@ -162,10 +190,10 @@
         </StackPanel>
         <StackPanel Grid.Row="2" Spacing="8">
 
-          <Button x:Name="LogsNavigationButton" Classes="nav" Classes.selected="{Binding IsLogsPage}" Tag="Logs" Click="OnNavigationClick" AutomationProperties.Name="控制台">
+          <Button x:Name="LogsNavigationButton" Classes="nav" Classes.selected="{Binding IsLogsPage}" Tag="Logs" Click="OnNavigationClick" AutomationProperties.Name="运行日志">
             <StackPanel Spacing="9" HorizontalAlignment="Center">
               <Path Classes="nav-icon" Data="{StaticResource logsIcon}" />
-              <TextBlock Text="控制台" FontSize="13" HorizontalAlignment="Center" />
+              <TextBlock Text="运行日志" FontSize="13" HorizontalAlignment="Center" />
             </StackPanel>
           </Button>
 
@@ -179,146 +207,91 @@
       </Grid>
     </Border>
     <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto">
-      <Border Background="#FFFFFF" BorderBrush="#E5E9EF" BorderThickness="0,0,0,1" Padding="28,15">
+      <Border Background="#FFFDFA" BorderBrush="{StaticResource LauncherBorderBrush}" BorderThickness="0,0,0,1" Padding="28,15">
         <Grid ColumnDefinitions="*,Auto">
           <TextBlock Text="{Binding CurrentPageTitle}" FontSize="20" FontWeight="Medium" Foreground="{StaticResource LauncherTextBrush}" />
           <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-            <TextBlock Text="Windows x64" FontSize="12" Foreground="#657181" VerticalAlignment="Center" />
-            <Border Background="#F1F5F9" CornerRadius="5" Padding="9,4">
-              <TextBlock Text="{Binding ModeBadge}" FontSize="11" Foreground="#516579" />
+            <Border IsVisible="{Binding IsSimulation}" Background="#F1EBFF" CornerRadius="8" Padding="9,4">
+              <TextBlock Text="{Binding ModeBadge}" FontSize="11" Foreground="#705799" />
             </Border>
           </StackPanel>
         </Grid>
       </Border>
       <Grid Grid.Row="1" Margin="26,20,26,18">
-        <ScrollViewer IsVisible="{Binding IsOverviewPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-          <StackPanel Spacing="16">
-            <Border Height="144" CornerRadius="10" ClipToBounds="True" Background="#0B263D">
+        <ScrollViewer x:Name="OverviewPage" IsVisible="{Binding IsOverviewPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="14">
+            <Border Height="152" CornerRadius="20" ClipToBounds="True" Background="#FFE57A">
               <Grid>
-                <Image Source="avares://AiGoofish.Launcher.App/Assets/market-banner.png" Stretch="UniformToFill" />
-                <StackPanel Margin="28,22" Spacing="8" VerticalAlignment="Center">
-                  <TextBlock Text="闲鱼监控 · AI 推荐" FontSize="30" FontWeight="Medium" Foreground="#FFFFFF" />
-                  <TextBlock Text="让值得关注的好物，及时出现在眼前" FontSize="14" Foreground="#E5EFF7" />
+                <Image x:Name="BrandBackground" Source="avares://AiGoofish.Launcher.App/Assets/brand-background.png" Width="350" HorizontalAlignment="Right" Stretch="UniformToFill">
+                  <Image.OpacityMask>
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
+                      <GradientStop Color="Transparent" Offset="0" />
+                      <GradientStop Color="White" Offset="0.32" />
+                    </LinearGradientBrush>
+                  </Image.OpacityMask>
+                </Image>
+                <Border>
+                  <Border.Background>
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
+                      <GradientStop Color="#FFF5CC" Offset="0" />
+                      <GradientStop Color="#FFF0B6" Offset="0.48" />
+                      <GradientStop Color="#00FFE57A" Offset="0.78" />
+                    </LinearGradientBrush>
+                  </Border.Background>
+                </Border>
+                <StackPanel Margin="26,20" Spacing="9" VerticalAlignment="Center" HorizontalAlignment="Left">
+                  <TextBlock Text="闲鱼监控 · AI 推荐" FontSize="29" FontWeight="SemiBold" Foreground="#30293B" />
+                  <TextBlock Text="让值得关注的好物，及时出现在眼前" FontSize="13" Foreground="#756345" />
                 </StackPanel>
               </Grid>
             </Border>
-            <Border Classes="card" Padding="18,14">
+            <Border Classes="card" Padding="24">
               <StackPanel Spacing="12">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="14">
                   <StackPanel Spacing="5">
                     <StackPanel Orientation="Horizontal" Spacing="9">
                       <Ellipse Width="9" Height="9" Fill="{Binding StatusAccentBrush}" VerticalAlignment="Center" />
                       <TextBlock Text="{Binding ServiceState}" FontSize="19" FontWeight="Medium" Foreground="#243449" />
                     </StackPanel>
-                    <TextBlock Text="{Binding PhaseMessage}" Classes="muted" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding PhaseMessage}" />
+                    <TextBlock Text="{Binding PhaseMessage}" Classes="muted" TextWrapping="Wrap" />
                   </StackPanel>
-                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Button Classes="secondary" Content="查看详情" Tag="Diagnostics" Click="OnNavigationClick" />
-                    <Button Classes="secondary" Content="刷新" Click="OnRefreshClick" />
-                  </StackPanel>
+                <Border IsVisible="{Binding SetupRequired}" Background="#FFF7DE" CornerRadius="9" Padding="12,9">
+                  <TextBlock Text="{Binding SetupHelp}" FontSize="12" Foreground="#826626" TextWrapping="Wrap" />
+                </Border>
+              </StackPanel>
+            </Border>
+            <Border Classes="card" Padding="20,12">
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="本机健康" Classes="section-title" />
+                  <Button Grid.Column="1" Classes="secondary" Content="查看诊断" Padding="10,5" Tag="Diagnostics" Click="OnNavigationClick" />
                 </Grid>
-                <Border Height="1" Background="#E9EDF2" />
-                <ItemsControl ItemsSource="{Binding Components}">
+                <ItemsControl x:Name="OverviewHealthComponents" ItemsSource="{Binding Components}">
                   <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="3" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:ComponentStatusRow">
-                      <StackPanel Margin="0,0,12,0" Spacing="4">
-                        <TextBlock Text="{Binding DisplayName}" FontSize="13" Foreground="#3A4B5E" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding Status}" FontSize="12" Foreground="#657181" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Status}" />
+                      <StackPanel Spacing="5" Margin="0,0,12,0">
+                        <TextBlock Text="{Binding DisplayName}" Classes="muted" />
+                        <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
                       </StackPanel>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <WrapPanel>
+                  <TextBlock Text="{Binding ManagementUrl}" FontFamily="Consolas" Classes="muted" Margin="0,0,16,0" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding FreshnessText}" Classes="muted" TextWrapping="Wrap" />
+                </WrapPanel>
               </StackPanel>
             </Border>
-            <Border IsVisible="{Binding SetupRequired}" Background="#FFF7E2" BorderBrush="#EBD398" BorderThickness="1" CornerRadius="8" Padding="14">
-              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="14">
-                <StackPanel Spacing="4">
-                  <TextBlock Text="完成首次设置" FontSize="15" Foreground="#715821" />
-                  <TextBlock Text="{Binding SetupHelp}" FontSize="13" Foreground="#715821" TextWrapping="Wrap" />
-                </StackPanel>
-                <Button x:Name="CopySetupTokenButton" Grid.Column="1" Classes="secondary" Content="复制一次性口令" IsEnabled="{Binding CanCopySetupToken}" Click="OnCopySetupTokenClick" TabIndex="1" />
-              </Grid>
-            </Border>
-            <Grid ColumnDefinitions="2*,*" ColumnSpacing="18">
-              <StackPanel Spacing="12">
-                <TextBlock Text="快捷入口" Classes="section-title" />
-                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="10">
-
-                  <Button x:Name="DataDirectoryShortcutButton" Classes="shortcut" Click="OnOpenDataClick" AutomationProperties.Name="数据目录">
-                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
-                      <Path Classes="line-icon" Data="{StaticResource folderIcon}" />
-                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                        <TextBlock Text="数据目录" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
-                        <TextBlock Text="打开本机数据位置" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
-                      </StackPanel>
-                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
-                    </Grid>
-                  </Button>
-
-                  <Button x:Name="LogsDirectoryShortcutButton" Classes="shortcut" Grid.Column="1" Click="OnOpenLogsClick" AutomationProperties.Name="日志目录">
-                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
-                      <Path Classes="line-icon" Data="{StaticResource folderIcon}" />
-                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                        <TextBlock Text="日志目录" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
-                        <TextBlock Text="查看本机日志文件" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
-                      </StackPanel>
-                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
-                    </Grid>
-                  </Button>
-
-                  <Button x:Name="LogPageShortcutButton" Classes="shortcut" Grid.Row="1" Tag="Logs" Click="OnNavigationClick" AutomationProperties.Name="运行日志">
-                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
-                      <Path Classes="line-icon" Data="{StaticResource logsIcon}" />
-                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                        <TextBlock Text="运行日志" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
-                        <TextBlock Text="查看启动与运行记录" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
-                      </StackPanel>
-                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
-                    </Grid>
-                  </Button>
-
-                  <Button x:Name="DiagnosticsShortcutButton" Classes="shortcut" Grid.Row="1" Grid.Column="1" Tag="Diagnostics" Click="OnNavigationClick" AutomationProperties.Name="诊断与备份">
-                    <Grid ColumnDefinitions="30,*,14" ColumnSpacing="12">
-                      <Path Classes="line-icon" Data="{StaticResource shieldIcon}" />
-                      <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                        <TextBlock Text="诊断与备份" FontSize="15" Foreground="{StaticResource LauncherTextBrush}" />
-                        <TextBlock Text="检查状态 · 管理备份" FontSize="12" Foreground="{StaticResource LauncherMutedBrush}" />
-                      </StackPanel>
-                      <Path Grid.Column="2" Data="{StaticResource arrowIcon}" Width="7" Height="12" Stretch="Uniform" Stroke="#84909C" StrokeThickness="1.5" VerticalAlignment="Center" />
-                    </Grid>
-                  </Button>
-                </Grid>
-              </StackPanel>
-              <StackPanel Grid.Column="1" Spacing="12">
-                <TextBlock Text="账号与 AI" Classes="section-title" />
-                <Border Classes="card" Padding="16" MinHeight="154">
-                  <StackPanel Spacing="9">
-                    <TextBlock Text="{Binding BusinessConnection.Status}" Classes="muted" TextWrapping="Wrap" />
-                    <StackPanel IsVisible="{Binding BusinessConnection.IsConfigurationVisible}" Spacing="4">
-                      <TextBlock Text="{Binding BusinessConnection.AccountSummary}" FontSize="13" TextTrimming="CharacterEllipsis" />
-                      <TextBlock Text="{Binding BusinessConnection.HealthCategoryText}" Classes="muted" />
-                    </StackPanel>
-                    <Button Classes="secondary" Content="管理 AI 连接  ›" Tag="Ai" Click="OnNavigationClick" HorizontalAlignment="Left" />
-                  </StackPanel>
-                </Border>
-              </StackPanel>
-            </Grid>
           </StackPanel>
         </ScrollViewer>
         <ScrollViewer IsVisible="{Binding IsSettingsPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Spacing="14">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-              <TextBlock Classes="section-title" Text="启动偏好" FontSize="20" VerticalAlignment="Center" />
-              <Button Grid.Column="1" Classes="secondary" Content="Web 系统设置  ↗" Click="OnAdvancedClick" TabIndex="24" />
-            </Grid>
 
           <Border Classes="card">
             <StackPanel Spacing="14">
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="20">
                 <StackPanel Spacing="4">
-                  <TextBlock Text="服务就绪后打开管理页" FontSize="15" FontWeight="SemiBold" />
-                  <TextBlock Classes="muted" Text="服务确认 Ready 后打开管理页或首次设置页。默认开启。" TextWrapping="Wrap" />
+                  <TextBlock Text="启动后打开管理页" FontSize="15" FontWeight="SemiBold" />
                 </StackPanel>
                 <ToggleSwitch x:Name="OpenManagementPagePreferenceCheckBox" Grid.Column="1" OnContent="" OffContent="" MinWidth="48"
                           IsChecked="{Binding OpenManagementPageOnReady, Mode=TwoWay}"
@@ -328,8 +301,8 @@
               <Border Background="#E9EDF2" Height="1" />
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="20">
                 <StackPanel Spacing="4">
-                  <TextBlock Text="打开 Launcher 时启动服务" FontSize="15" FontWeight="SemiBold" />
-                  <TextBlock Classes="muted" Text="仅恢复身份已核验且明确停止的既有实例。默认关闭；不会设置 Windows 开机自启。" TextWrapping="Wrap" />
+                  <TextBlock Text="打开启动器时启动服务" FontSize="15" FontWeight="SemiBold" />
+                  <TextBlock Classes="muted" Text="仅适用于已初始化且安全停止的服务，不会设置系统开机自启。" TextWrapping="Wrap" />
                 </StackPanel>
                 <ToggleSwitch x:Name="AutoStartPreferenceCheckBox" Grid.Column="1" OnContent="" OffContent="" MinWidth="48"
                           IsChecked="{Binding AutoStartOnLauncherOpen, Mode=TwoWay}"
@@ -343,9 +316,9 @@
           <Border x:Name="WebPortSettingsCard" IsVisible="{Binding HasWebPortPanel}" Classes="card">
             <StackPanel Spacing="9">
               <TextBlock Classes="section-title" Text="本机 Web 端口" />
-              <CheckBox x:Name="AutomaticWebPortCheckBox" Content="自动选择端口（取消勾选使用固定端口）" IsChecked="{Binding AutomaticWebPort, Mode=TwoWay}" IsEnabled="{Binding CanStageWebPort}" />
-              <TextBlock Classes="muted" Text="自动模式优先复用上次端口，占用时仅在全部停止后换用空闲端口；启动成功才保存新地址，不停止其他程序。固定模式冲突时只提示。切换模式需点击保存。" TextWrapping="Wrap" />
-              <TextBlock Classes="muted" Text="运行中保存只会暂存候选值；当前访问地址保持不变。停止全部组件后，确认应用会按正常 Host 生命周期启动候选端口；若端口占用或 Ready 检查失败，会尝试恢复旧地址。PostgreSQL 端口不变。" TextWrapping="Wrap" />
+              <CheckBox x:Name="AutomaticWebPortCheckBox" Content="自动选择端口" IsChecked="{Binding AutomaticWebPort, Mode=TwoWay}" IsEnabled="{Binding CanStageWebPort}" />
+              <TextBlock Classes="muted" Text="自动模式优先复用上次端口；取消勾选可指定固定端口。" TextWrapping="Wrap" />
+              <TextBlock Classes="muted" Text="保存不会立即切换端口。停止服务后才能应用；应用会启动服务，失败时尝试恢复原地址。" TextWrapping="Wrap" />
               <Grid ColumnDefinitions="*,*,*" ColumnSpacing="12">
                 <StackPanel Spacing="3">
                   <TextBlock Classes="muted" Text="当前生效" />
@@ -356,19 +329,20 @@
                   <TextBlock x:Name="PendingWebPortTextBlock" Text="{Binding PendingWebPortText}" FontFamily="Consolas" FontWeight="SemiBold" />
                 </StackPanel>
                 <StackPanel Grid.Column="2" Spacing="3">
-                  <TextBlock Classes="muted" Text="候选 Web 端口" />
+                  <TextBlock Classes="muted" Text="指定端口" />
                   <TextBox x:Name="WebPortTextBox" Text="{Binding WebPortInput, Mode=TwoWay}" IsEnabled="{Binding CanEnterWebPort}" PlaceholderText="1024–65535" TabIndex="2" />
                 </StackPanel>
               </Grid>
               <TextBlock x:Name="WebPortErrorTextBlock" Classes="validation-error" Text="{Binding WebPortError}" IsVisible="{Binding HasWebPortError}" />
               <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="StageWebPortButton" Classes="secondary" Content="保存模式 / 暂存端口" IsEnabled="{Binding CanStageWebPort}" Click="OnWebPortStageClick" TabIndex="3" />
-                <Button x:Name="ApplyWebPortButton" Classes="primary" Content="确认应用待处理端口" IsEnabled="{Binding CanApplyWebPort}" Click="OnWebPortApplyClick" TabIndex="4" />
-                <TextBlock x:Name="WebPortStatusTextBlock" Classes="muted" Text="{Binding WebPortStatus}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                <Button x:Name="StageWebPortButton" Classes="secondary" Content="保存设置" IsEnabled="{Binding CanStageWebPort}" Click="OnWebPortStageClick" TabIndex="3" />
+                <Button x:Name="ApplyWebPortButton" Classes="primary" Content="应用并启动" IsEnabled="{Binding CanApplyWebPort}" Click="OnWebPortApplyClick" TabIndex="4" />
               </StackPanel>
+              <TextBlock x:Name="WebPortStatusTextBlock" Classes="muted" Text="{Binding WebPortStatus}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 
+          <Button x:Name="DataDirectoryShortcutButton" Classes="secondary" Content="打开数据目录" Click="OnOpenDataClick" HorizontalAlignment="Left" />
           </StackPanel>
         </ScrollViewer>
         <ScrollViewer IsVisible="{Binding IsAiPage}" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -402,7 +376,7 @@
             <StackPanel Spacing="10">
               <StackPanel Spacing="3">
                 <TextBlock Classes="section-title" Text="当前账号与 AI 连接" />
-                <TextBlock Classes="muted" Text="仅连接当前 Web 账号的默认 AI 配置。Launcher 保存配置不会发送 AI 请求，也不会保存永久用户令牌。" TextWrapping="Wrap" />
+                <TextBlock Classes="muted" Text="编辑已授权用户的默认 AI 配置，不影响其他用户或任务指定的其他模型。保存不调用 AI。" TextWrapping="Wrap" />
               </StackPanel>
 
               <TextBlock Classes="muted" Text="{Binding BusinessConnection.Status}" TextWrapping="Wrap" />
@@ -411,6 +385,7 @@
                 <Button x:Name="BusinessPairingButton" Classes="secondary" Content="开始账号配对" IsEnabled="{Binding BusinessConnection.CanBeginPairing}" Click="OnBusinessPairingClick" TabIndex="2" />
                 <Button Classes="secondary" Content="取消配对" IsVisible="{Binding BusinessConnection.CanCancelPairing}" IsEnabled="{Binding BusinessConnection.CanCancelPairing}" Click="OnBusinessPairingCancelClick" TabIndex="3" />
                 <Button Classes="secondary" Content="退出当前账号" IsVisible="{Binding BusinessConnection.CanLogout}" IsEnabled="{Binding BusinessConnection.CanLogout}" Click="OnBusinessLogoutClick" TabIndex="4" />
+                <Button x:Name="SwitchBusinessAccountButton" Classes="secondary" Content="切换账号" IsVisible="{Binding BusinessConnection.CanLogout}" IsEnabled="{Binding BusinessConnection.CanLogout}" Click="OnSwitchBusinessAccountClick" />
               </WrapPanel>
 
               <Border IsVisible="{Binding BusinessConnection.IsPairingCodeVisible}" Padding="12" Background="#F5F7FA" BorderBrush="#D8E0EA" BorderThickness="1" CornerRadius="8">
@@ -423,6 +398,7 @@
 
               <StackPanel IsVisible="{Binding BusinessConnection.IsConfigurationVisible}" Spacing="9">
                 <TextBlock Text="{Binding BusinessConnection.AccountSummary}" FontWeight="SemiBold" Foreground="#24334A" TextWrapping="Wrap" />
+                <TextBlock Text="浏览器换号不会自动切换此处账号；切换时请在授权页核对用户名。" Classes="muted" TextWrapping="Wrap" />
                 <Button x:Name="BusinessValidationSummaryButton" Classes="secondary" IsVisible="{Binding BusinessConnection.HasValidationErrors}" Click="OnBusinessValidationSummaryClick" TabIndex="5" HorizontalContentAlignment="Left">
                   <TextBlock Text="{Binding BusinessConnection.ValidationSummary}" TextWrapping="Wrap" />
                 </Button>
@@ -460,16 +436,32 @@
                     <TextBlock Text="{Binding BusinessConnection.EffectiveState}" TextWrapping="Wrap" />
                   </StackPanel>
                 </Grid>
+                <Expander x:Name="AiAdvancedParameters" Header="高级参数 · 当前账号默认配置" HorizontalAlignment="Stretch">
+                  <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                      <StackPanel Spacing="4">
+                        <TextBlock Text="输出 tokens 字段名" Classes="muted" />
+                        <TextBox x:Name="AiTokensParameter" Text="{Binding BusinessConnection.TokensParameter, Mode=TwoWay}" PlaceholderText="如 max_tokens，可留空" IsEnabled="{Binding BusinessConnection.IsModelEditable}" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Text="输出 tokens 上限" Classes="muted" />
+                        <TextBox x:Name="AiTokensLimit" Text="{Binding BusinessConnection.TokensLimit, Mode=TwoWay}" IsEnabled="{Binding BusinessConnection.IsModelEditable}" />
+                      </StackPanel>
+                    </Grid>
+                    <TextBlock Text="字段名留空时不发送输出长度参数；上限未设置时使用 20000。按模型支持情况填写，保存后再测试。" Classes="muted" TextWrapping="Wrap" />
+                    <TextBlock Text="thinking、JSON 格式和图像输入开关尚未完成用户级隔离，本页不修改这些全局设置。" Classes="muted" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Expander>
+                <TextBlock IsVisible="{Binding BusinessConnection.HasAdvancedDraft}" Text="高级参数尚未保存；保存后才能手动测试 AI。" Foreground="#956600" TextWrapping="Wrap" />
                 <WrapPanel>
-                  <Button Classes="primary" Content="保存配置" IsEnabled="{Binding BusinessConnection.CanSave}" Click="OnBusinessAiSaveClick" TabIndex="9" />
+                  <Button Classes="primary" Content="保存当前账号配置" IsEnabled="{Binding BusinessConnection.CanSave}" Click="OnBusinessAiSaveClick" TabIndex="9" />
                   <Button Classes="secondary" Content="移除 API Key" IsEnabled="{Binding BusinessConnection.CanRemoveApiKey}" Click="OnBusinessApiKeyRemoveClick" TabIndex="10" />
                   <Button Classes="secondary" Content="重新读取配置" IsEnabled="{Binding BusinessConnection.CanRefreshConfiguration}" Click="OnBusinessAiRefreshClick" TabIndex="11" />
                   <Button Classes="secondary" Content="Web 高级设置" Click="OnAdvancedClick" TabIndex="12" />
                 </WrapPanel>
-
                 <Border Padding="12" Background="#F5F7FA" BorderBrush="#D8E0EA" BorderThickness="1" CornerRadius="8">
                   <StackPanel Spacing="5">
-                    <TextBlock Text="AI 健康缓存（只读，不发探测请求）" FontWeight="SemiBold" Foreground="#24334A" />
+                    <TextBlock Text="当前配置检测状态 · 读取缓存不产生调用" FontWeight="SemiBold" Foreground="#24334A" />
                     <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                       <TextBlock Text="{Binding BusinessConnection.HealthFreshnessText}" Classes="muted" />
                       <TextBlock Grid.Column="1" Text="{Binding BusinessConnection.HealthCategoryText}" FontWeight="SemiBold" Foreground="#24334A" />
@@ -510,7 +502,6 @@
           <StackPanel Spacing="14">
             <Border Background="{Binding PromptBackground}" BorderBrush="{Binding PromptBorderBrush}" BorderThickness="1" CornerRadius="9" Padding="16">
               <StackPanel Spacing="5">
-                <TextBlock Text="运行提示" FontSize="16" FontWeight="SemiBold" Foreground="{Binding PromptForeground}" />
                 <TextBlock Text="{Binding ServiceState}" FontSize="15" FontWeight="SemiBold" Foreground="{Binding PromptForeground}" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding ServiceDetail}" FontSize="13" Foreground="{Binding PromptForeground}" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding PhaseMessage}" FontSize="13" Foreground="{Binding PromptForeground}" TextWrapping="Wrap" />
@@ -518,41 +509,98 @@
             </Border>
             <Border Classes="card">
               <StackPanel Spacing="10">
-                <TextBlock Classes="section-title" Text="业务数据备份" />
-                <TextBlock Classes="muted" Text="备份与恢复均按现有安全流程执行。切换恢复数据后不会自动启动服务。" TextWrapping="Wrap" />
+                <TextBlock Classes="section-title" Text="备份与恢复" />
+                <TextBlock Classes="muted" Text="操作需要停止服务；恢复完成后请手动启动。请妥善保管备份口令，遗失后无法恢复。" TextWrapping="Wrap" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Button x:Name="BusinessBackupButton" Classes="secondary" Content="创建业务备份" IsEnabled="{Binding CanCreateBusinessBackup}" Click="OnBusinessBackupClick" TabIndex="19" />
-                  <Button x:Name="BusinessRestoreButton" Classes="secondary" Content="恢复业务备份" IsEnabled="{Binding CanRestoreBusinessBackup}" Click="OnBusinessRestoreClick" TabIndex="20" />
+                  <Button x:Name="BusinessBackupButton" Classes="secondary" Content="创建备份" IsEnabled="{Binding CanCreateBusinessBackup}" Click="OnBusinessBackupClick" TabIndex="19" />
+                  <Button x:Name="BusinessRestoreButton" Classes="secondary" Content="恢复备份" IsEnabled="{Binding CanRestoreBusinessBackup}" Click="OnBusinessRestoreClick" TabIndex="20" />
                 </StackPanel>
               </StackPanel>
             </Border>
             <Border Classes="card">
               <StackPanel Spacing="10">
-                <TextBlock Classes="section-title" Text="诊断与状态" />
+                <TextBlock Classes="section-title" Text="组件状态" />
+                <ItemsControl x:Name="DiagnosticComponents" ItemsSource="{Binding Components}">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="3" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:ComponentStatusRow">
+                      <StackPanel Margin="0,0,12,0" Spacing="4">
+                        <TextBlock Text="{Binding DisplayName}" FontSize="13" Foreground="#3A4B5E" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Status}" FontSize="12" Foreground="#657181" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Status}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
                 <TextBlock Classes="muted" Text="{Binding ObservationSummary}" TextWrapping="Wrap" />
                 <TextBlock Classes="muted" Text="{Binding FreshnessText}" TextWrapping="Wrap" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Button x:Name="DiagnosticExportButton" Classes="secondary" Content="生成诊断摘要" IsEnabled="{Binding CanExportDiagnostic}" Click="OnDiagnosticClick" TabIndex="22" />
+                  <Button x:Name="DiagnosticExportButton" Classes="secondary" Content="预览诊断报告" IsEnabled="{Binding CanExportDiagnostic}" Click="OnDiagnosticClick" TabIndex="22" />
                   <Button Classes="secondary" Content="刷新状态" Click="OnRefreshClick" TabIndex="23" />
-                  <Button Classes="secondary" Content="查看完整日志" Tag="Logs" Click="OnNavigationClick" />
                 </StackPanel>
               </StackPanel>
             </Border>
           </StackPanel>
         </ScrollViewer>
 
-        <Border IsVisible="{Binding IsLogsPage}" Background="#101827" BorderBrush="#29364B" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
-          <Grid RowDefinitions="Auto,*">
-            <Border Padding="18,14" BorderBrush="#29364B" BorderThickness="0,0,0,1">
-              <Grid ColumnDefinitions="*,Auto">
-                <StackPanel Spacing="3">
-                  <TextBlock Text="{Binding LogTitle}" FontSize="16" FontWeight="SemiBold" Foreground="#F4F7FB" />
-                  <TextBlock Text="界面最多保留 300 条；不显示控制口令或数据库凭据。" FontSize="12" Foreground="#C5D0DF" />
-                </StackPanel>
-                <TextBlock Grid.Column="1" Text="只读 · 不可输入命令" FontSize="12" Foreground="#C5D0DF" VerticalAlignment="Center" />
-              </Grid>
-            </Border>
-            <ListBox Grid.Row="1" ItemsSource="{Binding Logs}" Background="Transparent" BorderThickness="0" Padding="12" IsTextSearchEnabled="False">
+        <Grid IsVisible="{Binding IsLogsPage}" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="12">
+          <Border Classes="card" Padding="16,12">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+              <StackPanel Spacing="4" VerticalAlignment="Center">
+                <TextBlock Text="{Binding ServiceState}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="启动器运行记录" Classes="muted" />
+              </StackPanel>
+              <WrapPanel Grid.Column="1" MaxWidth="570" VerticalAlignment="Center" HorizontalAlignment="Right">
+                <Button x:Name="LogsDiagnosticButton" Classes="secondary" Content="诊断报告" IsEnabled="{Binding CanExportDiagnostic}" Click="OnDiagnosticClick" />
+                <Button x:Name="LogsCancelRestoreButton" Classes="secondary" Content="取消恢复" IsVisible="{Binding CanCancelBusinessRestore}" IsEnabled="{Binding CanCancelBusinessRestore}" Click="OnCancelRestoreClick" />
+                <Button x:Name="LogsCancelButton" Classes="secondary" Content="安全取消" IsVisible="{Binding IsCancelEnabled}" IsEnabled="{Binding IsCancelEnabled}" Click="OnCancelClick" />
+                <Button x:Name="LogsStopButton" Classes="danger" Content="停止服务" IsVisible="{Binding IsStopEnabled}" IsEnabled="{Binding IsStopEnabled}" Click="OnStopClick" />
+                <Button x:Name="LogsPrimaryButton" Classes="primary" MinWidth="188" HorizontalContentAlignment="Center" Content="{Binding DisplayPrimaryButtonText}" IsEnabled="{Binding IsPrimaryEnabled}" Click="OnPrimaryClick" />
+              </WrapPanel>
+            </Grid>
+          </Border>
+          <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Button x:Name="ActivityViewButton" Classes="secondary log-tab" Classes.selected="{Binding IsActivityView}" Content="活动摘要" Click="OnActivityViewClick" />
+              <Button x:Name="RawLogViewButton" Classes="secondary log-tab" Classes.selected="{Binding IsRawLogView}" Content="原始日志" Click="OnRawLogViewClick" />
+            </StackPanel>
+            <Button x:Name="LogsDirectoryShortcutButton" Grid.Column="1" Classes="secondary" Content="打开日志目录" Click="OnOpenLogsClick" />
+          </Grid>
+          <StackPanel Grid.Row="2" Spacing="4">
+            <WrapPanel>
+              <ComboBox x:Name="LogLevelFilter" SelectedIndex="{Binding LogView.LevelIndex, Mode=TwoWay}" MinWidth="140" Margin="0,0,8,8" AutomationProperties.Name="日志级别">
+                <ComboBoxItem Content="全部级别" /><ComboBoxItem Content="警告与错误" /><ComboBoxItem Content="仅错误" />
+              </ComboBox>
+              <Button x:Name="PauseLogViewButton" Classes="secondary" Content="{Binding LogView.PauseLabel}" Click="OnPauseLogsClick" />
+              <Button x:Name="ExportLogViewButton" Classes="secondary" Content="导出当前视图" Click="OnExportLogViewClick" />
+            </WrapPanel>
+            <TextBlock Text="{Binding LogView.Status}" Classes="muted" TextWrapping="Wrap" />
+          </StackPanel>
+          <Border x:Name="ActivityPanel" Grid.Row="3" IsVisible="{Binding IsActivityView}" Classes="card" Padding="0">
+            <Grid RowDefinitions="Auto,*">
+              <TextBlock Margin="18,14" Text="启动器活动 · 最近 100 条" Classes="muted" />
+              <ListBox x:Name="ActivityList" Grid.Row="1" ItemsSource="{Binding LogView.Activities}" Background="Transparent" BorderThickness="0" Padding="12,0,12,12" IsTextSearchEnabled="False">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="local:LogRow">
+                    <Border BorderBrush="#EEE9F1" BorderThickness="0,0,0,1" Padding="6,12">
+                      <StackPanel Spacing="7">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                          <TextBlock Text="{Binding Time}" FontFamily="Consolas" Classes="muted" />
+                          <TextBlock Text="{Binding Component}" Classes="muted" />
+                          <TextBlock Text="{Binding Level}" Foreground="{Binding LevelBrush}" FontSize="12" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="14" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock x:Name="ActivityEmptyState" Grid.Row="1" IsVisible="{Binding !LogView.HasActivities}" Text="暂无匹配的启动器活动" Classes="muted" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+          </Border>
+          <Border x:Name="RawLogPanel" Grid.Row="3" IsVisible="{Binding IsRawLogView}" Background="#101827" BorderBrush="#29364B" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
+            <Grid RowDefinitions="Auto,*">
+              <TextBlock Margin="18,14" Text="最近 300 条 · 只读" FontSize="12" Foreground="#C5D0DF" />
+            <ListBox x:Name="RawLogList" Grid.Row="1" ItemsSource="{Binding LogView.Logs}" Background="Transparent" BorderThickness="0" Padding="12" IsTextSearchEnabled="False">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="local:LogRow">
                   <Grid ColumnDefinitions="62,50,100,*" Margin="0,3">
@@ -564,20 +612,22 @@
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>
-          </Grid>
-        </Border>
+              <TextBlock x:Name="RawLogEmptyState" Grid.Row="1" IsVisible="{Binding !LogView.HasLogs}" Text="暂无匹配的日志输出" FontSize="13" Foreground="#AAB8CA" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+          </Border>
+        </Grid>
       </Grid>
 
-      <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E5E8EC" BorderThickness="0,1,0,0" Padding="22,12">
+      <Border x:Name="ActionFooter" Classes="action-footer" Classes.overview="{Binding IsOverviewPage}" IsVisible="{Binding !IsLogsPage}" Grid.Row="2">
         <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="9">
-          <StackPanel VerticalAlignment="Center" Spacing="2">
+          <StackPanel IsVisible="{Binding !IsOverviewPage}" VerticalAlignment="Center" Spacing="2">
             <TextBlock Text="{Binding ServiceState}" FontSize="13" FontWeight="SemiBold" Foreground="#344458" TextTrimming="CharacterEllipsis" />
-            <TextBlock Text="{Binding ObservationSummary}" FontSize="12" Foreground="#657181" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding ObservationSummary}" />
           </StackPanel>
           <Button x:Name="CancelRestoreButton" Grid.Column="1" Classes="secondary" Content="取消恢复" IsVisible="{Binding CanCancelBusinessRestore}" IsEnabled="{Binding CanCancelBusinessRestore}" Click="OnCancelRestoreClick" TabIndex="21" />
           <Button x:Name="CancelButton" Grid.Column="2" Classes="secondary" Content="安全取消" IsVisible="{Binding IsCancelEnabled}" IsEnabled="{Binding IsCancelEnabled}" Click="OnCancelClick" TabIndex="25" />
           <Button x:Name="StopButton" Grid.Column="3" Classes="danger" Content="停止服务" IsVisible="{Binding IsStopEnabled}" IsEnabled="{Binding IsStopEnabled}" Click="OnStopClick" TabIndex="26" />
-          <Button x:Name="PrimaryButton" Grid.Column="4" Classes="primary" MinWidth="202" MinHeight="56" FontSize="18" Content="{Binding PrimaryButtonText}" IsEnabled="{Binding IsPrimaryEnabled}" Click="OnPrimaryClick" TabIndex="27" />
+          <Button x:Name="PrimaryButton" Grid.Column="4" Classes="primary" IsVisible="{Binding IsOverviewPage}" MinWidth="232" MinHeight="64" FontSize="20" HorizontalContentAlignment="Center" Content="{Binding DisplayPrimaryButtonText}" IsEnabled="{Binding IsPrimaryEnabled}" Click="OnPrimaryClick" TabIndex="27" />
+          <Button x:Name="FooterPrimaryButton" Grid.Column="4" Classes="primary" IsVisible="{Binding !IsOverviewPage}" MinWidth="188" MinHeight="48" FontSize="16" Content="{Binding DisplayPrimaryButtonText}" IsEnabled="{Binding IsPrimaryEnabled}" Click="OnPrimaryClick" TabIndex="27" />
         </Grid>
       </Border>
     </Grid>

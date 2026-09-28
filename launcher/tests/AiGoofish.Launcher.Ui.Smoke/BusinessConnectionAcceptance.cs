@@ -16,7 +16,54 @@ internal static class BusinessConnectionAcceptance
         await TestExpiredPairingAndReadOnlyIdentityAsync();
         await TestValidationBindingAndKeyboardFocusAsync();
         await TestAiHealthLocalValidationAndManualTestAsync();
+        await TestAdvancedParametersAsync();
         Console.WriteLine("PASS Launcher business pairing, account invalidation, AI configuration CAS and safe routes");
+    }
+
+    private static async Task TestAdvancedParametersAsync()
+    {
+        var fake = new FakeBusinessClient
+        {
+            ExchangeResults = new Queue<LauncherPairingExchangeResult>(new[]
+            {
+                new LauncherPairingExchangeResult(false, DateTimeOffset.UtcNow.AddHours(1)),
+            }),
+        };
+        var vm = new LauncherBusinessConnectionViewModel(_ => Task.FromResult<ILauncherBusinessUserClient>(fake),
+            _ => true, pairingPollInterval: TimeSpan.FromMilliseconds(1));
+        try
+        {
+            await vm.SetHostReadyAsync(true);
+            await vm.BeginPairingAsync("http://127.0.0.1:58000/api/launcher/authorize");
+            WaitUntil(() => vm.IsPaired, "高级参数验收配对失败。");
+            Assert(vm.TokensParameter == "" && vm.TokensLimit == "20000" && !vm.HasAdvancedDraft,
+                "缺省高级参数只用于显示，不应变成待保存草稿。");
+            vm.TokensParameter = "bad field";
+            vm.TokensLimit = "0";
+            vm.CheckConfigurationLocally();
+            await vm.SaveAsync();
+            Assert(vm.HasValidationErrors && fake.SaveCalls == 0 && !vm.CanRunManualTest,
+                "非法高级参数本地检查/保存必须一致拒绝，不允许手测。");
+            vm.TokensParameter = "max_completion_tokens";
+            vm.TokensLimit = "8192";
+            await vm.SaveAsync();
+            Assert(fake.CurrentConfiguration.TokensParameter == "max_completion_tokens" &&
+                fake.CurrentConfiguration.TokensLimit == 8192 && !vm.HasAdvancedDraft && !vm.HasUnsavedChanges,
+                "高级参数应保存到当前配置，成功后清除草稿。");
+            vm.TokensLimit = "4096";
+            fake.ThrowConflictOnNextSave = true;
+            await vm.SaveAsync();
+            Assert(vm.TokensLimit == "8192" && !vm.HasAdvancedDraft, "版本冲突必须读取权威高级参数。");
+            vm.TokensParameter = "";
+            await vm.SaveAsync();
+            Assert(fake.CurrentConfiguration.TokensParameter == "", "留空字段名必须允许关闭输出长度参数注入。");
+            vm.TokensLimit = "1024";
+            await vm.LogoutAsync();
+            Assert(vm.TokensParameter.Length == 0 && vm.TokensLimit.Length == 0 && !vm.HasUnsavedChanges,
+                "退出账号必须清除高级参数及草稿，不能跨用户保留。");
+            Assert(fake.ManualTestCalls == 0, "高级参数保存/检查/冲突不得触发 AI 调用。");
+        }
+        finally { await vm.DisposeAsync(); }
     }
 
     private static async Task TestAiHealthLocalValidationAndManualTestAsync()
@@ -538,7 +585,9 @@ internal static class BusinessConnectionAcceptance
         }
         public Task<LauncherAiConfiguration> SaveAiConfigurationAsync(
             int configRevision, string configId, string? baseUrl, string? modelName, string? replacementApiKey,
-            bool removeApiKey = false, CancellationToken cancellationToken = default)
+            bool removeApiKey = false, CancellationToken cancellationToken = default,
+        string? tokensParameter = null,
+        int? tokensLimit = null)
         {
             SaveCalls++;
             SavedBaseUrl = baseUrl;
@@ -561,6 +610,8 @@ internal static class BusinessConnectionAcceptance
             {
                 BaseUrl = baseUrl ?? CurrentConfiguration.BaseUrl,
                 ModelName = modelName ?? CurrentConfiguration.ModelName,
+                TokensParameter = tokensParameter ?? CurrentConfiguration.TokensParameter,
+                TokensLimit = tokensLimit ?? CurrentConfiguration.TokensLimit,
                 ApiKeySet = removeApiKey ? false : replacementApiKey is not null || CurrentConfiguration.ApiKeySet,
                 ConfigRevision = configRevision + 1,
             };

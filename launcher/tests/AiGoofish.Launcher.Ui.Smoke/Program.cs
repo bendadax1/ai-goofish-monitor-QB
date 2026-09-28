@@ -200,6 +200,9 @@ if (!isHeadlessChild)
     await BusinessConnectionAcceptance.RunAsync();
     await LauncherPreferencesAcceptance.RunAsync();
 
+    await BrandVisualAcceptance.RunAsync(outputDirectory);
+    await LogViewsAcceptance.RunAsync(outputDirectory);
+
     var closeOwner = new Window { Width = 500, Height = 300 };
     closeOwner.Show();
     Dispatcher.UIThread.RunJobs();
@@ -306,16 +309,18 @@ if (!isHeadlessChild)
             ?? throw new InvalidOperationException($"{navigationCase.Page} 页离屏渲染未产生帧。");
         pageFrame.Save(navigationCase.Output, PngBitmapEncoderOptions.Default);
     }
+    var logsPrimary = window.FindControl<Button>("LogsPrimaryButton")!;
+    Assert(logsPrimary.IsEffectivelyVisible && logsPrimary.Content?.ToString() == primaryButton.Content?.ToString() &&
+        logsPrimary.IsEnabled == primaryButton.IsEnabled, "日志页必须共用首页主操作状态。");
+    logsPrimary.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+    PumpUntil(
+        () => string.Equals(primaryButton.Content?.ToString(), "开始模拟演练", StringComparison.Ordinal),
+        TimeSpan.FromSeconds(6), "日志页主操作未能停止模拟演练");
     window.FindControl<Button>("OverviewNavigationButton")
         ?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
     Dispatcher.UIThread.RunJobs();
     Assert(window.DataContext is MainWindowViewModel { IsOverviewPage: true }, "返回首页失败。");
 
-    primaryButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
-    PumpUntil(
-        () => string.Equals(primaryButton.Content?.ToString(), "开始模拟演练", StringComparison.Ordinal),
-        TimeSpan.FromSeconds(6),
-        "模拟演练未在时限内停止");
     Assert(window.DataContext is MainWindowViewModel { ServiceState: "模拟组件已停止", IsSimulation: true }, "ViewModel 必须报告模拟组件已停止。");
 
     window.Width = 920;

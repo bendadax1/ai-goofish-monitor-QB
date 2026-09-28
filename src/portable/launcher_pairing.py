@@ -596,6 +596,7 @@ async def launcher_get_ai(request: Request):
         "OPENAI_BASE_URL_REDACTED",
         "config_revision", "config_id", "config_source", "effective_state",
         "IS_MULTI_USER_MODE", "NEEDS_SETUP",
+        "AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT",
     }
     result = {key: value for key, value in settings.items() if key in allowed}
     base_url = str(result.get("OPENAI_BASE_URL") or "").strip()
@@ -636,6 +637,7 @@ async def launcher_update_ai(request: Request):
     payload = await _json_object(request, {
         "config_revision", "config_id", "OPENAI_BASE_URL", "OPENAI_MODEL_NAME",
         "OPENAI_API_KEY", "remove_api_key",
+        "AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT",
     })
     if not {"config_revision", "config_id"}.issubset(payload):
         raise HTTPException(status_code=428, detail="config_revision and config_id are required")
@@ -652,6 +654,14 @@ async def launcher_update_ai(request: Request):
             raise HTTPException(status_code=422, detail="OPENAI_BASE_URL must not contain credentials, query, or fragment")
     if "remove_api_key" in payload and not isinstance(payload["remove_api_key"], bool):
         raise HTTPException(status_code=422, detail="remove_api_key is invalid")
+    if "AI_MAX_TOKENS_PARAM_NAME" in payload:
+        name = payload["AI_MAX_TOKENS_PARAM_NAME"]
+        if not isinstance(name, str) or (name and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name)):
+            raise HTTPException(status_code=422, detail="AI_MAX_TOKENS_PARAM_NAME is invalid")
+    if "AI_MAX_TOKENS_LIMIT" in payload:
+        limit = payload["AI_MAX_TOKENS_LIMIT"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 2147483647:
+            raise HTTPException(status_code=422, detail="AI_MAX_TOKENS_LIMIT is invalid")
 
     # Run the existing dependency check explicitly before reusing the same
     # production validation, merge and config_revision CAS service.

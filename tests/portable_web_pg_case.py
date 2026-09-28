@@ -19,7 +19,7 @@ def main():
         (app_root / name).mkdir(parents=True)
     for name in ("login.html", "index.html"):
         (app_root / "templates" / name).write_text("<!doctype html><title>Fixture</title>", encoding="utf-8")
-    for relative in ("templates/portable_setup.html", "static/portable/setup.css", "static/portable/setup.js"):
+    for relative in ("templates/login.html", "templates/index.html", "templates/portable_setup.html", "static/portable/setup.css", "static/portable/setup.js", "static/js/account_policy.js"):
         target = app_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((source / relative).read_bytes())
@@ -43,25 +43,53 @@ def main():
             }
             assert client.get("/health").status_code == 200
             setup_page = client.get("/setup")
-            assert setup_page.status_code == 200 and "创建你的管理员账户" in setup_page.text
+            assert setup_page.status_code == 200 and "默认管理员账号" in setup_page.text
             assert setup_page.headers["cache-control"] == "no-store"
             assert "frame-ancestors 'none'" in setup_page.headers["content-security-policy"]
             assert client.get("/setup-assets/setup.js").status_code == 200
+            assert client.get("/setup-assets/account-policy.js").status_code == 200
             assert client.get("/api/tasks").status_code == 503
             assert client.get("/internal/ready", headers=control).json()["setup_required"] is True
-            payload = {"username": "web_admin", "password": "WebFixturePassword7!", "setup_token": os.environ["GOOFISH_LAUNCHER_TOKEN"]}
+            payload = {"password": "87654321"}
             assert client.post("/setup", json=payload, headers=origin).status_code == 401
-            payload["setup_token"] = os.environ["GOOFISH_PORTABLE_SETUP_TOKEN"]
+            setup_control = {**control, "Authorization": "Bearer " + os.environ["GOOFISH_PORTABLE_SETUP_TOKEN"]}
+            ticket_response = client.post("/internal/setup-ticket", headers=setup_control)
+            assert ticket_response.status_code == 200
+            assert client.post("/setup/authorize", json=ticket_response.json(), headers=origin).status_code == 200
+            assert client.post("/setup", json={"password": "1234567"}, headers=origin).status_code == 422
             assert client.post("/setup", json=payload, headers=origin).status_code == 201
             assert client.post("/setup", json=payload, headers=origin).status_code == 409
             assert client.get("/internal/ready", headers=control).json()["setup_required"] is False
             assert client.get("/api/tasks").status_code == 401
-            login = client.post("/login", data={"username": "web_admin", "password": "WebFixturePassword7!"}, headers=origin, follow_redirects=False)
+            login = client.post("/login", data={"username": "admin", "password": "87654321"}, headers=origin, follow_redirects=False)
             assert login.status_code == 302
             token = client.cookies.get("session_token")
             assert token and token.startswith("p1.")
             assert client.get("/auth/status").json()["authenticated"] is True
             assert client.get("/api/tasks").status_code == 200
+            index = client.get("/")
+            assert index.status_code == 200 and 'data-account-policy=' in index.text
+            assert index.text.index('/static/js/account_policy.js') < index.text.index('/static/js/modules/users_view.js')
+            from src.storage import get_storage
+            storage = get_storage()
+            viewer_group = next(group for group in storage.list_user_groups() if group['code'] == 'viewer_group')
+            new_user = {"username": "numeric_user", "password": "1234567", "group_ids": [viewer_group['id']]}
+            assert client.post("/api/users", json=new_user, headers=origin).status_code == 422
+            assert storage.get_user_by_username("numeric_user") is None
+            new_user['password'] = "98765432"
+            created = client.post("/api/users", json=new_user, headers=origin)
+            assert created.status_code == 200
+            user_id = created.json()['user']['id']
+            assert client.put(f"/api/users/{user_id}/password", json={"new_password": "1234567"}, headers=origin).status_code == 422
+            assert client.put(f"/api/users/{user_id}/password", json={"new_password": "23456789"}, headers=origin).status_code == 200
+            from src.storage.utils import verify_password
+            assert verify_password("23456789", storage.get_user_by_username("numeric_user")['password_hash'])
+            assert client.put("/api/users/me/password", json={"old_password": "87654321", "new_password": "1234567"}, headers=origin).status_code == 422
+            assert client.put("/api/users/me/password", json={"old_password": "87654321", "new_password": "98765432"}, headers=origin).status_code == 200
+            # Existing portable revocation behavior remains effective after changing a password.
+            assert client.get("/auth/status").json()["authenticated"] is False
+            assert client.post("/login", data={"username": "admin", "password": "98765432"}, headers=origin, follow_redirects=False).status_code == 302
+            token = client.cookies.get("session_token")
             assert client.get("/logout", follow_redirects=False).status_code == 302
             client.cookies.set("session_token", token)
             assert client.get("/api/tasks").status_code == 401

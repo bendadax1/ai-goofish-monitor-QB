@@ -11,20 +11,33 @@ junction、路径穿越、敏感配置及未知运行时文件。`--dry-run` 会
 
 ## 布局和 current.json
 
-布局定义在 `scripts/portable/portable-bundle-layout.json`。输出根保留
-`AiGoofish.Launcher.App.exe` 及其同级 .NET 文件；不能只改名 EXE，因为
-runtimeconfig、deps 和 native 文件名仍须匹配。其他组件固定在：
+布局定义在 `scripts/portable/portable-bundle-layout.json`。Launcher 的 EXE、
+runtimeconfig、deps 和 native 文件一起放在 `launcher/`，避免 .NET 依赖散落在包根；
+不能只改名或单独移动 EXE。其他组件固定在：
 
 ```text
 <bundle>/
-  AiGoofish.Launcher.App.exe
-  app/app-<version>/
-  runtime/<python-runtime-id>/python.exe
-  browsers/<browser-runtime-id>/chrome-win64/chrome.exe
-  postgres/<postgres-runtime-id>/
+  AiGoofish.exe                 根目录启动入口
+  uninstall.exe                 根目录卸载入口
+  launcher/AiGoofish.Launcher.App.exe
+  app/                          Python 业务代码
+  runtime/python.exe
+  browsers/chrome-win64/chrome.exe
+  postgres/bin/postgres.exe
   current.json
   bundle-manifest.json
 ```
+
+双击根目录 `AiGoofish.exe` 即可启动；它是同一 .NET apphost 的轻量入口，
+指向 `launcher/` 内的受管程序集，移动整个解压目录后仍使用相对路径。
+`launcher/AiGoofish.Launcher.App.exe` 继续作为内部入口。组件准确版本与内容身份保存在
+`current.json` 和完整 manifest 中，不再额外嵌套一层版本号目录；发布时排除 PDB 调试符号。
+
+根目录 `uninstall.exe` 先核对组合包，再提供两个选择：默认只移除 manifest 中的程序文件，
+保留首次运行形成的 `data/` 与 `backups/`；“完全删除”会另行警告并要求再次确认，
+才移除这两个用户数据目录。卸载助手先检查未知文件、重解析点和占用，再逐项删除；
+遇到异常会停止，不把未知文件当作程序垃圾。卸载后如保留数据，包根目录仍会存在，
+便于用户复制或手动处理这些资料。
 
 `data/` 是首次运行才创建的用户数据根，不作为构建产物写入。`current.json`
 格式版本为 1，包含 `release_id`、`platform`，以及 `app`、`runtime`、`browser`、

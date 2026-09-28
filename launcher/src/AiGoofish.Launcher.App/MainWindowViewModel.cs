@@ -23,6 +23,8 @@ internal enum LauncherPage
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
     private const int UiLogCapacity = 300;
+    private const int UiActivityCapacity = 100;
+    private bool _isActivityView = true;
     private readonly bool _isSimulation;
     private readonly string _bundleRoot;
     private readonly PortableBundleDescriptor? _verifiedBundle;
@@ -44,7 +46,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string _cancelHint;
     private string _serviceDetail;
     private string _managementUrl = "尚未启动";
-    private string? _setupToken;
+    private int _managementPageOpening;
     private bool _setupRequired;
     private bool _shutdownInProgress;
     private bool _backupInFlight;
@@ -103,7 +105,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         TimeSpan? businessPairingPollIntervalForAcceptance = null)
     {
         _isSimulation = isSimulation;
-        _bundleRoot = Path.GetFullPath(bundleRoot ?? AppContext.BaseDirectory);
+        var executableDirectory = Path.GetFullPath(AppContext.BaseDirectory);
+        var defaultBundleRoot = string.Equals(
+            Path.GetFileName(Path.TrimEndingDirectorySeparator(executableDirectory)),
+            "launcher", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFullPath(Path.Combine(executableDirectory, ".."))
+            : executableDirectory;
+        _bundleRoot = Path.GetFullPath(bundleRoot ?? defaultBundleRoot);
         if (verifiedBundle is not null && !Path.GetFullPath(verifiedBundle.BundleRoot).Equals(_bundleRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("已验证发行描述符与窗口包根目录不一致。", nameof(verifiedBundle));
@@ -139,6 +147,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             pairingPollInterval: businessPairingPollIntervalForAcceptance);
         Components = new ObservableCollection<ComponentStatusRow>();
         Logs = new ObservableCollection<LogRow>();
+        Activities = new ObservableCollection<LogRow>();
+        LogView = new LauncherLogViewModel(Logs, Activities);
+        Logs.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasLogs));
+        Activities.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasActivities));
         if (isSimulation)
         {
             _serviceState = "未开始";
@@ -169,6 +181,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ObservableCollection<ComponentStatusRow> Components { get; }
 
     public ObservableCollection<LogRow> Logs { get; }
+    public ObservableCollection<LogRow> Activities { get; }
+    public LauncherLogViewModel LogView { get; }
+    public bool HasLogs => Logs.Count > 0;
+    public bool HasActivities => Activities.Count > 0;
+    public bool IsActivityView => _isActivityView;
+    public bool IsRawLogView => !_isActivityView;
+
+    internal void SelectLogView(bool activity)
+    {
+        if (_isActivityView == activity) return;
+        _isActivityView = activity;
+        OnPropertyChanged(nameof(IsActivityView));
+        OnPropertyChanged(nameof(IsRawLogView));
+    }
+
+    private void AddActivity(LogRow row)
+    {
+        while (Activities.Count >= UiActivityCapacity) Activities.RemoveAt(Activities.Count - 1);
+        Activities.Insert(0, row);
+    }
 
     public LauncherBusinessConnectionViewModel BusinessConnection => _businessConnection;
 
@@ -182,12 +214,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string CurrentPageTitle => _selectedPage switch
     {
-        LauncherPage.Overview => "一键启动",
+        LauncherPage.Overview => "首页",
         LauncherPage.Ai => "账号与 AI 连接",
         LauncherPage.Settings => "启动器设置",
         LauncherPage.Diagnostics => "诊断与备份",
-        LauncherPage.Logs => "启动日志",
-        _ => "一键启动",
+        LauncherPage.Logs => "运行日志",
+        _ => "首页",
     };
 
     public string CurrentPageDescription => _selectedPage switch
@@ -343,9 +375,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (SetField(ref _primaryButtonText, value))
             {
                 NotifyPromptAppearance();
+                OnPropertyChanged(nameof(DisplayPrimaryButtonText));
             }
         }
     }
+
+    // Presentation only: execution still goes through the existing primary-action gate.
+    public string DisplayPrimaryButtonText => SetupRequired && PrimaryButtonText == "打开管理页"
+        ? "设置登录密码" : PrimaryButtonText;
 
     private bool HasBlockingIssue => _primaryButtonText is "需要诊断" or "无法启动" ||
         _serviceState.Contains("拒绝", StringComparison.Ordinal) ||
@@ -409,7 +446,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public bool CanCopySetupToken => SetupRequired && !string.IsNullOrEmpty(_setupToken);
+    public bool CanOpenSetup => SetupRequired && _realHost is not null && !_webPortIntentUnresolved && !_webPortRefreshFailed;
 
     public bool CanCreateBusinessBackup =>
         !_isSimulation && !_backupInFlight && !_shutdownInProgress &&
@@ -484,7 +521,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public string SetupHelp => SetupRequired
-        ? "首次管理员尚未创建。一次性设置口令只保存在本次 Launcher 内存中；点击复制后前往管理页完成设置。"
+        ? "默认账号：admin。首次使用请设置登录密码。"
         : "首次设置帮助仅在服务明确报告需要创建管理员时显示。";
 
     public async Task InitializeAsync()
@@ -554,7 +591,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 {
                     ManagementUrl = IsRealHostWebPortStateKnown ? host.ManagementUrl : "端口状态待核验";
                     SetupRequired = readiness.SetupRequired is true;
-                    _setupToken = SetupRequired ? host.SetupToken : null;
                     PhaseMessage = recovery.Message;
                     NotifySetupProperties();
                     if (IsRealHostWebPortStateKnown)
@@ -724,7 +760,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 ManagementUrl = IsRealHostWebPortStateKnown ? uiHost.ManagementUrl : "端口状态待核验";
                 SetupRequired = started.SetupRequired;
-                _setupToken = SetupRequired ? _realHost?.SetupToken : null;
                 NotifySetupProperties();
                 if (started.PortChanged)
                     WebPortStatus = $"原端口不可用，已自动改用 {started.EffectivePort}；当前地址为 {uiHost.ManagementUrl}。";
@@ -1527,7 +1562,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
-        TryOpen(_realHost.ManagementUrl, "管理页");
+        _ = OpenManagementPageCoreAsync();
+    }
+
+    private async Task OpenManagementPageCoreAsync()
+    {
+        if (Interlocked.Exchange(ref _managementPageOpening, 1) != 0) return;
+        var host = _realHost;
+        var generation = Interlocked.Read(ref _coordinatorGeneration);
+        try
+        {
+            if (host is null || _disposed || Volatile.Read(ref _shutdownRequested) != 0) return;
+            var target = await host.CreateManagementBrowserUrlAsync();
+            if (!ReferenceEquals(host, _realHost) || generation != Interlocked.Read(ref _coordinatorGeneration) ||
+                _disposed || Volatile.Read(ref _shutdownRequested) != 0 || _webPortIntentUnresolved || _webPortRefreshFailed ||
+                _coordinator?.Snapshot.State is not LauncherState.Running) return;
+            TryOpen(target, "管理页");
+        }
+        catch (Exception exception)
+        {
+            Trace.TraceError($"打开首次设置/管理页失败；异常类型：{exception.GetType().Name}");
+            PhaseMessage = "管理页暂时无法打开，请确认服务运行后重试。无需查找设置码。";
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _managementPageOpening, 0);
+        }
     }
 
     public bool TrySaveCloseChoicePreference(WindowCloseChoice choice)
@@ -1615,11 +1675,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 if (readiness?.State is PythonReadinessState.Ready)
                 {
                     SetupRequired = readiness.SetupRequired is true;
-                    if (!SetupRequired)
-                    {
-                        _setupToken = null;
-                    }
-
                     PhaseMessage = SetupRequired
                         ? "服务就绪，仍需完成首次管理员设置。"
                         : "服务、数据库与 schema 就绪；首次设置已完成。";
@@ -1713,13 +1768,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             _realOperationGate.Release();
         }
-    }
-
-    public string? GetSetupTokenForExplicitCopy() => CanCopySetupToken ? _setupToken : null;
-
-    public void MarkSetupTokenCopied()
-    {
-        PhaseMessage = "一次性设置口令已复制到剪贴板。完成首次管理员设置后请勿继续保存或分享。";
     }
 
     public void ShowAdvancedUnavailable()
@@ -2069,7 +2117,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _effectiveWebPort = 0;
             _pendingWebPort = null;
             _webPortRevision = 0;
-            _setupToken = null;
             SetupRequired = false;
             ManagementUrl = "尚未启动";
             PrimaryButtonText = "一键启动";
@@ -2104,9 +2151,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             while (_startupDiagnosticSequenceOrder.Count > 512)
                 _seenStartupDiagnosticSequences.Remove(_startupDiagnosticSequenceOrder.Dequeue());
             while (Logs.Count >= UiLogCapacity) Logs.RemoveAt(0);
+            var activity = LauncherActivityText.FromDiagnostic(entry);
             Logs.Add(new LogRow(entry.OccurredAtUtc.ToLocalTime().ToString("HH:mm:ss"),
-                entry.Kind is StartupEventKind.Failed or StartupEventKind.StorageUnavailable ? "错误" : "诊断",
+                activity.Level,
                 entry.Component.ToString(), StartupDiagnostics.Describe(entry)));
+            AddActivity(activity);
         });
     }
 
@@ -2125,7 +2174,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 Logs.RemoveAt(0);
             }
 
-            Logs.Add(new LogRow(entry.Timestamp.ToString("HH:mm:ss"), LevelText(entry.Level), entry.Component, entry.Message));
+            var row = new LogRow(entry.Timestamp.ToString("HH:mm:ss"), LevelText(entry.Level), entry.Component, entry.Message);
+            Logs.Add(row);
+            // Real lifecycle summaries come from the structured startup journal. Retain
+            // coordinator warnings/errors too; simulation has no real startup journal.
+            if (_isSimulation && entry.Level is not LauncherLogLevel.Debug ||
+                entry.Level is LauncherLogLevel.Warning or LauncherLogLevel.Error)
+                AddActivity(row);
         });
     }
 
@@ -2325,14 +2380,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
         {
-            PhaseMessage = $"无法打开{label}：{exception.Message}";
+            Trace.TraceError($"打开{label}失败；异常类型：{exception.GetType().Name}");
+            PhaseMessage = $"无法打开{label}，请检查系统默认浏览器或文件关联后重试。";
             return false;
         }
     }
 
     private void NotifySetupProperties()
     {
-        OnPropertyChanged(nameof(CanCopySetupToken));
+        OnPropertyChanged(nameof(DisplayPrimaryButtonText));
+        OnPropertyChanged(nameof(CanOpenSetup));
         OnPropertyChanged(nameof(SetupHelp));
     }
 
@@ -2456,7 +2513,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _managementPageOpenAttemptedForReadyGeneration = true;
         if (_openManagementPageOnReady)
         {
-            TryOpen(_realHost.ManagementUrl, setupRequired ? "首次设置页" : "管理页");
+            _ = OpenManagementPageCoreAsync();
         }
     }
 
@@ -2514,4 +2571,12 @@ public sealed class ComponentStatusRow : INotifyPropertyChanged
     }
 }
 
-public sealed record LogRow(string Time, string Level, string Component, string Message);
+public sealed record LogRow(string Time, string Level, string Component, string Message)
+{
+    public string LevelBrush => Level switch
+    {
+        "错误" => "#AC3636",
+        "警告" => "#956600",
+        _ => "#705799",
+    };
+}

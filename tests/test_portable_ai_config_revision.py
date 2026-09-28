@@ -130,6 +130,19 @@ class PortableAiConfigRevisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.storage.update_calls), 1)
         invalidate.assert_called_once_with(self.user)
 
+    async def test_tokens_patch_keeps_user_scope_and_other_extra_fields(self):
+        with mock.patch.object(settings_manager, "invalidate_ai_health_snapshot"):
+            await settings_manager.update_ai_settings({
+                "config_revision": 7, "config_id": "config-a",
+                "AI_MAX_TOKENS_PARAM_NAME": "max_completion_tokens", "AI_MAX_TOKENS_LIMIT": 4096,
+            }, user=self.user)
+        call = self.storage.update_calls[0]
+        self.assertEqual(call[:3], ("user-1", 7, "config-a"))
+        self.assertEqual(self.storage.config["extra_config"]["AI_MAX_TOKENS_LIMIT"], 4096)
+        self.assertEqual(self.storage.config["extra_config"]["AI_MAX_TOKENS_PARAM_NAME"], "max_completion_tokens")
+        self.assertEqual(self.storage.config["extra_config"]["ADVANCED_RETRY_COUNT"], 5)
+        self.assertEqual(self.storage.config["api_key"], "secret-value")
+
     async def test_stale_revision_returns_conflict_and_does_not_write(self):
         with self.assertRaises(HTTPException) as raised:
             await settings_manager.update_ai_settings({

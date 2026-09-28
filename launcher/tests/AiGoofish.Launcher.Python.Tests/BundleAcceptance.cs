@@ -54,6 +54,22 @@ internal static class BundleAcceptance
                 using var root = await http.GetAsync("");
                 if (root.StatusCode != HttpStatusCode.SeeOther || root.Headers.Location?.ToString() != "/setup")
                     throw new IOException("First-run redirect missing");
+                var setupUrl = new Uri(await host.CreateManagementBrowserUrlAsync());
+                if (setupUrl.GetLeftPart(UriPartial.Authority) != http.BaseAddress.GetLeftPart(UriPartial.Authority) ||
+                    setupUrl.AbsolutePath != "/setup" || !setupUrl.Fragment.StartsWith("#ticket=", StringComparison.Ordinal) ||
+                    setupUrl.AbsoluteUri.Contains(host.SetupToken, StringComparison.Ordinal))
+                    throw new IOException("Browser setup authorization must use a scoped ticket, not the setup credential");
+                var browserTicket = setupUrl.Fragment["#ticket=".Length..];
+                http.DefaultRequestHeaders.Add("Origin", http.BaseAddress.GetLeftPart(UriPartial.Authority));
+                using var authorize = await http.PostAsync("setup/authorize", new StringContent(
+                    System.Text.Json.JsonSerializer.Serialize(new { ticket = browserTicket }), System.Text.Encoding.UTF8, "application/json"));
+                if (authorize.StatusCode != HttpStatusCode.OK)
+                    throw new IOException("Packaged browser setup ticket was not accepted");
+                using var replay = await http.PostAsync("setup/authorize", new StringContent(
+                    System.Text.Json.JsonSerializer.Serialize(new { ticket = browserTicket }), System.Text.Encoding.UTF8, "application/json"));
+                if (replay.StatusCode != HttpStatusCode.Unauthorized)
+                    throw new IOException("Packaged browser setup ticket was reusable");
+                http.DefaultRequestHeaders.Remove("Origin");
                 using var setup = await http.GetAsync("setup");
                 var html = await setup.Content.ReadAsStringAsync();
                 if (setup.StatusCode != HttpStatusCode.OK || !html.Contains("<form", StringComparison.Ordinal))

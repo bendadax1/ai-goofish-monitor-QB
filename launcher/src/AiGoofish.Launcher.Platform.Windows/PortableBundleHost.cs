@@ -98,7 +98,8 @@ public sealed record PortableBundleDescriptor(
             NormalizeRelativePath(current.Postgres.RelativeDir),
         };
         var appComponentRoot = NormalizeRelativePath(current.App.RelativeDir);
-        var launcherExecutableRelative = NormalizeRelativePath(current.Launcher.Executable);
+        var launcherComponentRoot = NormalizeRelativePath(current.Launcher.RelativeDir);
+        var launcherExecutableRelative = Path.Combine(launcherComponentRoot, NormalizeRelativePath(current.Launcher.Executable));
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in manifest.Files)
@@ -127,8 +128,10 @@ public sealed record PortableBundleDescriptor(
 
 
             if (IsExecutablePayload(relative) &&
+                !relative.Equals("AiGoofish.exe", StringComparison.OrdinalIgnoreCase) &&
+                !relative.Equals("uninstall.exe", StringComparison.OrdinalIgnoreCase) &&
                 !relative.Equals(launcherExecutableRelative, StringComparison.OrdinalIgnoreCase) &&
-                !relative.Equals("createdump.exe", StringComparison.OrdinalIgnoreCase) &&
+                !relative.Equals(Path.Combine(launcherComponentRoot, "createdump.exe"), StringComparison.OrdinalIgnoreCase) &&
                 !executableComponentRoots.Any(componentRoot => IsStrictDescendant(componentRoot, relative)))
             {
                 var location = IsStrictDescendant(appComponentRoot, relative)
@@ -161,6 +164,8 @@ public sealed record PortableBundleDescriptor(
             Path.Combine(postgresRoot, "bin", "postgres.exe"),
             bootstrap,
             launcherExecutable,
+            Path.Combine(root, "AiGoofish.exe"),
+            Path.Combine(root, "uninstall.exe"),
         })
         {
             var requiredFile = RequirePlainFile(required, "必需组件文件");
@@ -232,12 +237,9 @@ public sealed record PortableBundleDescriptor(
         }
 
         var relative = NormalizeRelativePath(component.RelativeDir);
-        var parts = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2 ||
-            !string.Equals(parts[0], requiredPrefix, StringComparison.Ordinal) ||
-            !string.Equals(parts[1], component.ExactId, StringComparison.Ordinal))
+        if (!string.Equals(relative, requiredPrefix, StringComparison.Ordinal))
         {
-            throw new PortableBundleException("组合包组件目录与 exact_id 不匹配。");
+            throw new PortableBundleException("组合包组件目录无效。");
         }
 
         return RequirePlainDirectory(Path.Combine(root, relative), "组合包组件目录");
@@ -246,13 +248,13 @@ public sealed record PortableBundleDescriptor(
     private static string ResolveLauncher(string root, LauncherComponent component)
     {
         if (!IdentifierPattern.IsMatch(component.ExactId ?? string.Empty) ||
-            component.RelativeDir != "." ||
+            component.RelativeDir != "launcher" ||
             !string.Equals(component.Executable, "AiGoofish.Launcher.App.exe", StringComparison.Ordinal))
         {
             throw new PortableBundleException("Launcher current.json 契约无效。");
         }
 
-        return root;
+        return RequirePlainDirectory(Path.Combine(root, "launcher"), "Launcher 组件目录");
     }
 
     private static string NormalizeRelativePath(string value)
@@ -332,7 +334,8 @@ public sealed record PortableBundleDescriptor(
                 }
 
                 var relative = Path.GetRelativePath(root, entry);
-                if (!relative.Equals("data", StringComparison.OrdinalIgnoreCase))
+                if (!relative.Equals("data", StringComparison.OrdinalIgnoreCase) &&
+                    !relative.Equals("backups", StringComparison.OrdinalIgnoreCase))
                 {
                     pending.Push(entry);
                 }
@@ -595,6 +598,33 @@ public sealed class RealPortableStackHost : IAsyncDisposable
     public LauncherRuntime Runtime { get; }
 
     public string ManagementUrl => $"http://127.0.0.1:{_webPort}/";
+
+    public async Task<string> CreateManagementBrowserUrlAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!await _recoveryGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("实例维护中，请稍后打开管理页。");
+        try
+        {
+            _lease.EnsureHeld();
+            var readiness = await _python.RefreshReadinessAsync(cancellationToken).ConfigureAwait(false);
+            if (readiness.State is not PythonReadinessState.Ready)
+                throw new InvalidOperationException("本机服务尚未就绪。");
+            if (readiness.SetupRequired is not true) return ManagementUrl;
+            var token = _python.SetupToken ?? throw new InvalidOperationException("首次设置授权暂不可用。");
+            using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false })
+            {
+                Timeout = TimeSpan.FromSeconds(5),
+                MaxResponseContentBufferSize = 4096,
+            };
+            return await PortableSetupBrowserClient.CreateUrlAsync(
+                client, ManagementUrl, _lease.InstanceId.ToString("D"), token, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _recoveryGate.Release();
+        }
+    }
 
     public string DataRoot => _lease.InstanceRoot;
 

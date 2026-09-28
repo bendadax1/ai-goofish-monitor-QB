@@ -469,9 +469,17 @@ namespace AiGoofish.Portable
                 --no-restore `
                 --artifacts-path $artifactRoot `
                 --property:UseSharedCompilation=false `
+                --property:DebugType=None `
+                --property:DebugSymbols=false `
                 --output $publishRoot
             if ($LASTEXITCODE -ne 0) {
                 throw "Launcher win-x64 自包含发布失败，退出码 $LASTEXITCODE。"
+            }
+
+            # NuGet native assets can still carry PDB files when DebugType is disabled.
+            # This directory was created exclusively for the current publish.
+            foreach ($symbol in @(Get-ChildItem -LiteralPath $publishRoot -File -Recurse -Filter '*.pdb' -ErrorAction Stop)) {
+                Remove-Item -LiteralPath $symbol.FullName -ErrorAction Stop
             }
 
             $publishFiles = Get-ChildItem -LiteralPath $publishRoot -File -Recurse

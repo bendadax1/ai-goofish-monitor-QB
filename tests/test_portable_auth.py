@@ -87,6 +87,42 @@ else:
     raise AssertionError('default session key accepted')
 """)
 
+    def test_existing_short_passwords_still_authenticate_in_both_modes(self):
+        for portable in (False, True):
+            with self.subTest(portable=portable):
+                self._run("""
+import src.web.auth as auth
+from src.storage.utils import hash_password
+auth.is_multi_user_mode = lambda: True
+storage = Mock()
+storage.get_user_by_username.return_value = {
+    'id': 'fixture-id', 'username': 'admin', 'role': 'super_admin',
+    'is_active': True, 'password_hash': hash_password('old123'),
+}
+auth.get_storage = lambda: storage
+assert auth.verify_user('admin', 'old123')['user_id'] == 'fixture-id'
+assert auth.verify_user('admin', 'wrong') is None
+""", portable=portable)
+
+    def test_storage_rejects_invalid_new_credentials_before_database_access(self):
+        self._run("""
+from src.storage.postgres_adapter import PostgresAdapter
+adapter = object.__new__(PostgresAdapter)
+adapter.get_session = Mock(side_effect=AssertionError('invalid input reached database'))
+for operation in (
+    lambda: adapter.create_user({'username': 'admin', 'password': '1234567'}),
+    lambda: adapter.create_user({'username': ' admin', 'password': '12345678'}),
+    lambda: adapter.update_user('fixture-id', {'password': '1234567'}),
+):
+    try:
+        operation()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('invalid credentials accepted')
+adapter.get_session.assert_not_called()
+""")
+
     def test_actual_web_import_mounts_and_unauthenticated_boundary(self):
         self._run("""
 import os
