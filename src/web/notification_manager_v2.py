@@ -7,6 +7,12 @@ from src.ai_handler import (
     send_test_task_completion_notification,
 )
 from src.logging_config import get_logger
+from src.web.notification_test_guard import (
+    NotificationTestBusy,
+    NotificationTestConflict,
+    NotificationTestFailed,
+    send_test_once,
+)
 from src.web.auth import check_permission, has_category, is_multi_user_mode, require_auth
 from src.web.models import (
     NotificationRequest,
@@ -96,24 +102,37 @@ async def send_test_notification_api(
     try:
         owner_id = _resolve_owner_id(user)
         channel_display_name = CHANNEL_NAME_MAP.get(request.channel, request.channel)
-        result = await send_test_notification(
-            request.channel,
+        result = await send_test_once(
             owner_id=owner_id,
-            bound_task=request.bound_task or request.bound_account,
+            request_id=request.request_id,
+            test_type="standard",
+            channel=request.channel,
             config_id=request.config_id,
+            bound_task=request.bound_task or request.bound_account,
+            sender=lambda: send_test_notification(
+                request.channel,
+                owner_id=owner_id,
+                bound_task=request.bound_task or request.bound_account,
+                config_id=request.config_id,
+            ),
         )
         if result:
             return {"message": f"测试通知已成功发送到 {channel_display_name} 渠道。", "success": True}
         return {"message": f"测试通知发送失败到 {channel_display_name} 渠道。", "success": False}
     except HTTPException:
         raise
+    except NotificationTestConflict:
+        raise HTTPException(status_code=409, detail="请求 ID 已用于其他测试目标。") from None
+    except NotificationTestBusy:
+        raise HTTPException(status_code=429, detail="测试通知请求过多，请稍后重试。") from None
+    except NotificationTestFailed:
+        raise HTTPException(status_code=500, detail="测试通知结果未知，请检查通知渠道。") from None
     except Exception as exc:
         logger.error(
             "发送测试通知失败",
-            extra={"event": "notification_test_failed", "channel": request.channel},
-            exc_info=exc,
+            extra={"event": "notification_test_failed", "channel": request.channel, "error_type": type(exc).__name__},
         )
-        raise HTTPException(status_code=500, detail=f"发送测试通知时出错: {exc}")
+        raise HTTPException(status_code=500, detail="发送测试通知失败，请查看服务日志。") from None
 
 
 @router.post("/api/notifications/test-task-completion")
@@ -125,24 +144,37 @@ async def send_test_task_completion_notification_api(
     try:
         owner_id = _resolve_owner_id(user)
         channel_display_name = CHANNEL_NAME_MAP.get(request.channel, request.channel)
-        result = await send_test_task_completion_notification(
-            request.channel,
+        result = await send_test_once(
             owner_id=owner_id,
-            bound_task=request.bound_task or request.bound_account,
+            request_id=request.request_id,
+            test_type="completion",
+            channel=request.channel,
             config_id=request.config_id,
+            bound_task=request.bound_task or request.bound_account,
+            sender=lambda: send_test_task_completion_notification(
+                request.channel,
+                owner_id=owner_id,
+                bound_task=request.bound_task or request.bound_account,
+                config_id=request.config_id,
+            ),
         )
         if result:
             return {"message": f"任务完成测试通知已成功发送到 {channel_display_name} 渠道。", "success": True}
         return {"message": f"任务完成测试通知发送失败到 {channel_display_name} 渠道。", "success": False}
     except HTTPException:
         raise
+    except NotificationTestConflict:
+        raise HTTPException(status_code=409, detail="请求 ID 已用于其他测试目标。") from None
+    except NotificationTestBusy:
+        raise HTTPException(status_code=429, detail="测试通知请求过多，请稍后重试。") from None
+    except NotificationTestFailed:
+        raise HTTPException(status_code=500, detail="测试通知结果未知，请检查通知渠道。") from None
     except Exception as exc:
         logger.error(
             "发送任务完成测试通知失败",
-            extra={"event": "notification_test_completion_failed", "channel": request.channel},
-            exc_info=exc,
+            extra={"event": "notification_test_completion_failed", "channel": request.channel, "error_type": type(exc).__name__},
         )
-        raise HTTPException(status_code=500, detail=f"发送任务完成测试通知时出错: {exc}")
+        raise HTTPException(status_code=500, detail="发送任务完成测试通知失败，请查看服务日志。") from None
 
 
 @router.post("/api/notifications/test-product")
@@ -154,21 +186,34 @@ async def send_test_product_notification_api(
     try:
         owner_id = _resolve_owner_id(user)
         channel_display_name = CHANNEL_NAME_MAP.get(request.channel, request.channel)
-        result = await send_test_product_notification(
-            request.channel,
+        result = await send_test_once(
             owner_id=owner_id,
-            bound_task=request.bound_task or request.bound_account,
+            request_id=request.request_id,
+            test_type="product",
+            channel=request.channel,
             config_id=request.config_id,
+            bound_task=request.bound_task or request.bound_account,
+            sender=lambda: send_test_product_notification(
+                request.channel,
+                owner_id=owner_id,
+                bound_task=request.bound_task or request.bound_account,
+                config_id=request.config_id,
+            ),
         )
         if result:
             return {"message": f"商品卡测试通知已成功发送到 {channel_display_name} 渠道。", "success": True}
         return {"message": f"商品卡测试通知发送失败到 {channel_display_name} 渠道。", "success": False}
     except HTTPException:
         raise
+    except NotificationTestConflict:
+        raise HTTPException(status_code=409, detail="请求 ID 已用于其他测试目标。") from None
+    except NotificationTestBusy:
+        raise HTTPException(status_code=429, detail="测试通知请求过多，请稍后重试。") from None
+    except NotificationTestFailed:
+        raise HTTPException(status_code=500, detail="测试通知结果未知，请检查通知渠道。") from None
     except Exception as exc:
         logger.error(
             "发送商品卡测试通知失败",
-            extra={"event": "notification_test_product_failed", "channel": request.channel},
-            exc_info=exc,
+            extra={"event": "notification_test_product_failed", "channel": request.channel, "error_type": type(exc).__name__},
         )
-        raise HTTPException(status_code=500, detail=f"发送商品卡测试通知时出错: {exc}")
+        raise HTTPException(status_code=500, detail="发送商品卡测试通知失败，请查看服务日志。") from None

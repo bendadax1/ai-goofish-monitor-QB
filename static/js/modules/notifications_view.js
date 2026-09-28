@@ -341,7 +341,8 @@ function parseNotificationCardPayload(card) {
     const configId = String(card.getAttribute('data-config-id') || '').trim();
     const channelType = String(card.getAttribute('data-channel-type') || '').trim();
     const configName = String(card.querySelector('.notify-config-name')?.value || '').trim();
-    const boundTask = String(card.querySelector('.notify-bound-task-select')?.value || card.getAttribute('data-bound-task') || '').trim();
+    const taskSelect = card.querySelector('.notify-bound-task-select');
+    const boundTask = String(taskSelect ? taskSelect.value : card.getAttribute('data-bound-task') || '').trim();
     const isEnabled = Boolean(card.querySelector('.notify-enabled')?.checked);
     const notifyOnRecommend = Boolean(card.querySelector('.notify-on-recommend')?.checked);
     const notifyOnComplete = Boolean(card.querySelector('.notify-on-complete')?.checked);
@@ -358,7 +359,10 @@ function parseNotificationCardPayload(card) {
         const key = String(field.getAttribute('data-field-key') || '').trim();
         if (!key) return;
         const rawValue = String(field.value || '').trim();
-        if (!rawValue) return;
+        if (!rawValue) {
+            config[key] = '';
+            return;
+        }
         if (key === 'headers') {
             try {
                 const parsed = JSON.parse(rawValue);
@@ -375,9 +379,7 @@ function parseNotificationCardPayload(card) {
         config[key] = rawValue;
     });
 
-    if (boundTask) {
-        config.bound_task = boundTask;
-    }
+    config.bound_task = boundTask;
 
     return {
         configId,
@@ -416,6 +418,16 @@ function setNotificationCardCollapsed(card, collapsed) {
     const collapseButton = card.querySelector('.notify-collapse-btn');
     if (collapseButton) {
         collapseButton.textContent = shouldCollapse ? '展开' : '收起';
+    }
+}
+
+function syncNotificationCardAfterSave(card, savedResult) {
+    if (card.getAttribute('data-channel-type') !== 'ntfy') return;
+    const savedConfig = savedResult?.config?.config;
+    if (!savedConfig || typeof savedConfig !== 'object') return;
+    const tokenField = card.querySelector('.notify-channel-field[data-field-key="token"]');
+    if (tokenField && !savedConfig.token) {
+        tokenField.value = '';
     }
 }
 
@@ -471,6 +483,7 @@ async function sendNotificationConfigTest(card, testType) {
             channel: channelType,
             config_id: configId || null,
             bound_task: boundTask || null,
+            request_id: createNotificationTestRequestId(),
         }),
     });
 
@@ -482,6 +495,13 @@ async function sendNotificationConfigTest(card, testType) {
         throw new Error(result.message || '测试通知失败');
     }
     return result;
+}
+
+function createNotificationTestRequestId() {
+    if (globalThis.crypto?.randomUUID) {
+        return globalThis.crypto.randomUUID();
+    }
+    return `notify-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function getCurrentNotificationTabKey(serverRoot) {
@@ -512,7 +532,8 @@ function activateNotificationTabByKey(serverRoot, targetKey) {
 async function ensureConfigPersistedForTesting(card) {
     const { configId, payload } = parseNotificationCardPayload(card);
     if (configId) {
-        await updateMyNotificationConfig(configId, payload);
+        const savedResult = await updateMyNotificationConfig(configId, payload);
+        syncNotificationCardAfterSave(card, savedResult);
         return configId;
     }
     const created = await createMyNotificationConfig(payload);
@@ -522,6 +543,7 @@ async function ensureConfigPersistedForTesting(card) {
         throw new Error(created?.message || '测试前自动保存失败');
     }
     card.setAttribute('data-config-id', newConfigId);
+    syncNotificationCardAfterSave(card, created);
     setNotificationCardCollapsed(card, false);
     return newConfigId;
 }
@@ -637,6 +659,7 @@ async function renderServerNotificationView(notificationContainer, options = {})
                 if (savedId) {
                     card.setAttribute('data-config-id', savedId);
                 }
+                syncNotificationCardAfterSave(card, savedResult);
 
                 Notification.success('通知配置保存成功');
                 setNotificationCardCollapsed(card, true);
@@ -681,6 +704,7 @@ async function renderServerNotificationView(notificationContainer, options = {})
         if (testButton) {
             const testType = String(testButton.getAttribute('data-test-type') || 'product').trim();
             const originText = testButton.textContent;
+            if (testButton.disabled) return;
             try {
                 testButton.disabled = true;
                 testButton.textContent = '测试中...';
@@ -812,23 +836,23 @@ async function initializeLocalNotificationsView(notificationContainer) {
     const testButtons = notificationForm.querySelectorAll('.test-notification-btn');
     testButtons.forEach(button => {
         button.addEventListener('click', async () => {
-            const settings = buildNotificationSettingsPayload(notificationForm);
-            const saveResult = await updateNotificationSettings(settings);
-            if (!saveResult) {
-                Notification.error('保存设置失败，请先检查设置是否正确。');
-                return;
-            }
-
             const channel = button.dataset.channel;
             const originalText = button.textContent;
+            if (button.disabled) return;
             button.disabled = true;
             button.textContent = '测试中...';
 
             try {
+                const settings = buildNotificationSettingsPayload(notificationForm);
+                const saveResult = await updateNotificationSettings(settings);
+                if (!saveResult) {
+                    Notification.error('保存设置失败，请先检查设置是否正确。');
+                    return;
+                }
                 const response = await fetch('/api/notifications/test', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ channel }),
+                    body: JSON.stringify({ channel, request_id: createNotificationTestRequestId() }),
                 });
                 const result = await response.json().catch(() => ({}));
                 if (!response.ok || result.success === false) {
@@ -847,23 +871,23 @@ async function initializeLocalNotificationsView(notificationContainer) {
     const testTaskCompletionButtons = notificationForm.querySelectorAll('.test-task-completion-btn');
     testTaskCompletionButtons.forEach(button => {
         button.addEventListener('click', async () => {
-            const settings = buildNotificationSettingsPayload(notificationForm);
-            const saveResult = await updateNotificationSettings(settings);
-            if (!saveResult) {
-                Notification.error('保存设置失败，请先检查设置是否正确。');
-                return;
-            }
-
             const channel = button.dataset.channel;
             const originalText = button.textContent;
+            if (button.disabled) return;
             button.disabled = true;
             button.textContent = '测试中...';
 
             try {
+                const settings = buildNotificationSettingsPayload(notificationForm);
+                const saveResult = await updateNotificationSettings(settings);
+                if (!saveResult) {
+                    Notification.error('保存设置失败，请先检查设置是否正确。');
+                    return;
+                }
                 const response = await fetch('/api/notifications/test-task-completion', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ channel }),
+                    body: JSON.stringify({ channel, request_id: createNotificationTestRequestId() }),
                 });
                 const result = await response.json().catch(() => ({}));
                 if (!response.ok || result.success === false) {

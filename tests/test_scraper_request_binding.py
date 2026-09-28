@@ -1,11 +1,15 @@
 import unittest
 
-from src.scraper import _build_extra_headers, _capture_new_request_response
+from src.search_requests import (
+    build_extra_headers as _build_extra_headers,
+    capture_new_request_response as _capture_new_request_response,
+)
 
 
 class _FakeRequest:
     def __init__(self, url, response):
         self.url = url
+        self.method = "POST"
         self._response = response
 
     async def response(self):
@@ -60,7 +64,7 @@ class ScraperRequestBindingTests(unittest.IsolatedAsyncioTestCase):
 
         actual = await _capture_new_request_response(
             page,
-            "search-api",
+            "example.test/search-api",
             submit_action,
         )
 
@@ -74,7 +78,7 @@ class ScraperRequestBindingTests(unittest.IsolatedAsyncioTestCase):
             page.emit_request(_FakeRequest("https://example.test/analytics", object()))
             page.emit_request(_FakeRequest("https://example.test/search-api", submitted_response))
 
-        actual = await _capture_new_request_response(page, "search-api", submit_action)
+        actual = await _capture_new_request_response(page, "example.test/search-api", submit_action)
 
         self.assertIs(actual, submitted_response)
 

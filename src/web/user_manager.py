@@ -7,6 +7,7 @@
 import os
 import io
 import base64
+from urllib.parse import urlparse
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException, status, Depends, Query, File, UploadFile
@@ -51,28 +52,31 @@ def _normalize_legacy_ntfy_config_item(item: dict) -> dict:
     if not isinstance(item, dict) or str(item.get("channel_type") or "").strip().lower() != "ntfy":
         return item
     raw_config = item.get("config") if isinstance(item.get("config"), dict) else {}
-    if str(raw_config.get("topic") or "").strip() or not str(raw_config.get("topic_url") or "").strip():
-        return item
+    config = dict(raw_config)
+    for name, alias in (("topic", "ntfy_topic"), ("server_url", "ntfy_server_url"), ("token", "ntfy_token")):
+        if not str(config.get(name) or "").strip() and str(config.get(alias) or "").strip():
+            config[name] = config[alias]
+    legacy = str(config.get("topic_url") or config.get("ntfy_topic_url") or config.get("url") or "").strip()
+    if str(config.get("topic") or "").strip() or not legacy:
+        return {**item, "config": config}
     try:
         from src.notifier.config import parse_legacy_ntfy_url
-        parsed = parse_legacy_ntfy_url(raw_config.get("topic_url"))
+        parsed = parse_legacy_ntfy_url(legacy)
     except Exception as exc:
         logger.warning(
             "规范化旧 ntfy 通知配置失败",
             extra={"event": "ntfy_legacy_config_normalize_failed", "config_id": item.get("id")},
             exc_info=exc,
         )
-        return item
+        return {**item, "config": config}
     if not parsed:
-        return item
-    normalized = dict(item)
-    config = dict(raw_config)
+        return {**item, "config": config}
     config["topic"] = parsed[1]
-    config.setdefault("server_url", parsed[0])
-    if parsed[2]:
-        config.setdefault("token", parsed[2])
-    normalized["config"] = config
-    return normalized
+    if not str(config.get("server_url") or "").strip():
+        config["server_url"] = parsed[0]
+    if parsed[2] and not str(config.get("token") or "").strip():
+        config["token"] = parsed[2]
+    return {**item, "config": config}
 
 
 def _ntfy_config_server_url(config: dict) -> str:
@@ -89,7 +93,12 @@ def _ntfy_config_server_url(config: dict) -> str:
                 extra={"event": "user_ntfy_legacy_server_parse_failed"},
                 exc_info=exc,
             )
-    return (server or "https://ntfy.sh").lower()
+    server = server or "https://ntfy.sh"
+    try:
+        parsed = urlparse(server)
+        return parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower()).geturl()
+    except ValueError:
+        return server
 
 
 def _clear_reused_ntfy_token_on_server_change(existing_item: dict, update_payload: dict) -> dict:
@@ -107,9 +116,62 @@ def _clear_reused_ntfy_token_on_server_change(existing_item: dict, update_payloa
     new_token = str(new_config.get("token") or "").strip()
     if not new_token or new_token == old_token:
         new_config.pop("token", None)
+        new_config.pop("ntfy_token", None)
     sanitized = dict(update_payload)
     sanitized["config"] = new_config
     return sanitized
+
+
+def _merge_notification_config_update(existing_item: dict, update_payload: dict) -> dict:
+    """更新明确提交的字段，并避免旧 ntfy URL 恢复已清除的 token。"""
+    incoming = update_payload.get("config")
+    if not isinstance(incoming, dict):
+        return update_payload
+    normalized = _normalize_legacy_ntfy_config_item(existing_item)
+    current = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
+    merged_config = {**current, **incoming}
+    channel = str(existing_item.get("channel_type") or "").strip().lower()
+    aliases = {
+        "ntfy": {"topic": ("ntfy_topic",), "server_url": ("ntfy_server_url",), "token": ("ntfy_token",)},
+        "gotify": {"url": ("gotify_url",), "token": ("gotify_token",)},
+        "bark": {"url": ("bark_url",)},
+        "wx_bot": {"url": ("wx_bot_url",)},
+        "wx_app": {"corp_id": ("wx_corp_id",), "agent_id": ("wx_agent_id",), "secret": ("wx_secret",), "to_user": ("wx_to_user",)},
+        "telegram": {"bot_token": ("telegram_bot_token",), "chat_id": ("telegram_chat_id",)},
+        "webhook": {"url": ("webhook_url",), "method": ("webhook_method",), "headers": ("webhook_headers",), "content_type": ("webhook_content_type",), "query_parameters": ("webhook_query_parameters",), "body": ("webhook_body",)},
+        "dingtalk": {"webhook": ("dingtalk_webhook",), "secret": ("dingtalk_secret",)},
+    }
+    for field_name in incoming:
+        for alias in aliases.get(channel, {}).get(field_name, ()):
+            merged_config.pop(alias, None)
+    if "bound_task" in incoming:
+        for alias in ("bound_task_name", "task_name", "bound_account", "bound_account_name", "account_name", "platform_account"):
+            merged_config.pop(alias, None)
+    if channel == "ntfy":
+        if "topic_url" not in incoming:
+            merged_config.pop("topic_url", None)
+            merged_config.pop("ntfy_topic_url", None)
+            merged_config.pop("url", None)
+        elif str(incoming.get("topic_url") or "").strip() and not str(incoming.get("topic") or "").strip():
+            try:
+                from src.notifier.config import parse_legacy_ntfy_url
+                parsed = parse_legacy_ntfy_url(incoming["topic_url"])
+            except Exception as exc:
+                logger.warning(
+                    "解析提交的旧 ntfy URL 失败",
+                    extra={"event": "user_ntfy_legacy_update_parse_failed", "error_type": type(exc).__name__},
+                )
+                parsed = None
+            if parsed:
+                merged_config.update({"server_url": parsed[0], "topic": parsed[1]})
+                if parsed[2]:
+                    merged_config["token"] = parsed[2]
+                merged_config.pop("topic_url", None)
+        merged = _clear_reused_ntfy_token_on_server_change(
+            existing_item, {**update_payload, "config": merged_config}
+        )
+        return merged
+    return {**update_payload, "config": merged_config}
 
 
 # ============== Pydantic 模型 ==============
@@ -912,7 +974,7 @@ async def update_my_notification_config(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="配置不存在"
         )
-    update_payload = _clear_reused_ntfy_token_on_server_change(existing_item, update_payload)
+    update_payload = _merge_notification_config_update(existing_item, update_payload)
     config = storage.save_user_notification_config(user.get("user_id"), update_payload)
 
     log_audit_action(

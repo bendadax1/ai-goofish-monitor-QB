@@ -489,6 +489,14 @@ async function initializeSettingsView() {
         setValue('#openai-model-name', aiSettings.OPENAI_MODEL_NAME || '');
         setValue('#ai-max-tokens-param-name', aiSettings.AI_MAX_TOKENS_PARAM_NAME || '');
         setValue('#ai-max-tokens-limit', aiSettings.AI_MAX_TOKENS_LIMIT ?? '');
+        const fallbackInput = aiForm.querySelector('#ai-parameter-fallback-enabled');
+        if (fallbackInput) {
+            fallbackInput.checked = aiSettings.AI_PARAMETER_FALLBACK_ENABLED === true;
+        }
+        const reasoningFallbackInput = aiForm.querySelector('#ai-reasoning-fallback-enabled');
+        if (reasoningFallbackInput) {
+            reasoningFallbackInput.checked = aiSettings.AI_REASONING_FALLBACK_ENABLED === true;
+        }
 
         const apiKeyInput = aiForm.querySelector('#openai-api-key');
         if (apiKeyInput) {
@@ -661,6 +669,8 @@ async function initializeSettingsView() {
                 }
                 settings[convertedKey] = value || '';
             }
+            settings.AI_PARAMETER_FALLBACK_ENABLED = formData.get('AI_PARAMETER_FALLBACK_ENABLED') === 'on';
+            settings.AI_REASONING_FALLBACK_ENABLED = formData.get('AI_REASONING_FALLBACK_ENABLED') === 'on';
 
             const portableSettings = isPortableRevision(aiSettings);
             if (portableSettings) {
@@ -720,7 +730,7 @@ async function initializeSettingsView() {
                 const genericToggleSettings = buildAiGenericToggleSettings(formData);
 
                 for (let [key, value] of formData.entries()) {
-                    if (aiGenericToggleKeys.has(key)) {
+                    if (aiGenericToggleKeys.has(key) || key === 'AI_PARAMETER_FALLBACK_ENABLED' || key === 'AI_REASONING_FALLBACK_ENABLED') {
                         continue;
                     }
                     settings[key] = value || '';

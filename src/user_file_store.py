@@ -9,10 +9,15 @@ from __future__ import annotations
 
 import os
 import re
+import logging
+import stat
 from pathlib import Path, PureWindowsPath
 from typing import Dict, List, Optional
 
 from src.portable.app_paths import get_portable_runtime_paths
+from src.file_safety import UnsafeFilePathError, check_scoped_path, validate_filename
+
+logger = logging.getLogger(__name__)
 
 _KIND_CONFIG: Dict[str, Dict[str, object]] = {
     "prompts": {
@@ -96,31 +101,16 @@ def _validate_kind(kind: str) -> str:
 
 def _safe_filename(filename: str) -> str:
     text = str(filename or "").strip().replace("\\", "/")
-    portable_paths = get_portable_runtime_paths()
-    if portable_paths is not None:
-        windows_path = PureWindowsPath(text)
-        reserved_stems = {
-            "CON", "PRN", "AUX", "NUL",
-            *(f"COM{number}" for number in range(1, 10)),
-            *(f"LPT{number}" for number in range(1, 10)),
-        }
-        if (
-            not text
-            or "\x00" in text
-            or "/" in text
-            or windows_path.anchor
-            or text in {".", ".."}
-            or ":" in text
-            or any(character in text for character in '<>"|?*')
-            or any(ord(character) < 32 for character in text)
-            or text.rstrip(". ") != text
-            or text.split(".", 1)[0].upper() in reserved_stems
-        ):
-            raise ValueError("便携版文件名必须是安全的单个文件名")
-    text = text.split("/")[-1]
-    if not text:
-        raise ValueError("文件名不能为空")
-    return text
+    if get_portable_runtime_paths() is None:
+        # 仅保留历史内部 basename 兼容；Web 入口必须先校验完整输入。
+        text = text.split("/")[-1]
+    return validate_filename(text)
+
+
+def _checked_path(path: Path, *, default: bool = False, directory: bool = False) -> Path:
+    paths = get_portable_runtime_paths()
+    root = (paths.program_root if default else paths.data_root) if paths else Path.cwd()
+    return check_scoped_path(path, root, directory=directory)
 
 
 def get_user_scoped_path(kind: str, filename: str, owner_id: Optional[str]) -> Path:
@@ -132,14 +122,14 @@ def get_user_scoped_path(kind: str, filename: str, owner_id: Optional[str]) -> P
     config = _KIND_CONFIG[normalized_kind]
     safe_owner = _sanitize_owner_fragment(normalized_owner)
     safe_name = _safe_filename(filename)
-    return _user_file_root() / safe_owner / str(config["user_subdir"]) / safe_name
+    return _checked_path(_user_file_root() / safe_owner / str(config["user_subdir"]) / safe_name)
 
 
 def get_shared_path(kind: str, filename: str) -> Path:
     """返回共享目录路径。"""
     normalized_kind = _validate_kind(kind)
     safe_name = _safe_filename(filename)
-    return _shared_dir(normalized_kind) / safe_name
+    return _checked_path(_shared_dir(normalized_kind) / safe_name)
 
 
 def get_scoped_read_candidates(kind: str, filename: str, owner_id: Optional[str]) -> List[Path]:
@@ -151,7 +141,7 @@ def get_scoped_read_candidates(kind: str, filename: str, owner_id: Optional[str]
     candidates.append(get_shared_path(kind, filename))
     default_dir = _default_dir(_validate_kind(kind))
     if default_dir is not None:
-        candidates.append(default_dir / _safe_filename(filename))
+        candidates.append(_checked_path(default_dir / _safe_filename(filename), default=True))
     return candidates
 
 
@@ -168,8 +158,12 @@ def resolve_scoped_path(kind: str, filename: str, owner_id: Optional[str], for_w
             target = get_user_scoped_path(kind, filename, normalized_owner)
         else:
             target = get_shared_path(kind, filename)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        return target
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("创建作用域文件目录失败")
+            raise
+        return _checked_path(target)
 
     for path in get_scoped_read_candidates(kind, filename, normalized_owner):
         if path.exists():
@@ -188,34 +182,34 @@ def list_scoped_files(kind: str, owner_id: Optional[str], include_shared: bool =
     names = set()
     normalized_owner = normalize_owner_id(owner_id)
 
+    directories = []
     if normalized_owner:
-        user_dir = get_user_scoped_path(normalized_kind, "__placeholder__", normalized_owner).parent
-        if user_dir.exists():
-            for entry in user_dir.iterdir():
-                if not entry.is_file():
-                    continue
-                if expected_ext and entry.suffix.lower() != expected_ext:
-                    continue
-                names.add(entry.name)
-
+        directories.append((get_user_scoped_path(normalized_kind, "__placeholder__", normalized_owner).parent, False))
     if include_shared:
-        shared_dir = _shared_dir(normalized_kind)
-        if shared_dir.exists():
-            for entry in shared_dir.iterdir():
-                if not entry.is_file():
-                    continue
-                if expected_ext and entry.suffix.lower() != expected_ext:
-                    continue
-                names.add(entry.name)
-
+        directories.append((_shared_dir(normalized_kind), False))
         default_dir = _default_dir(normalized_kind)
-        if default_dir is not None and default_dir.exists():
-            for entry in default_dir.iterdir():
-                if not entry.is_file():
+        if default_dir is not None:
+            directories.append((default_dir, True))
+    for folder, is_default in directories:
+        _checked_path(folder, default=is_default, directory=True)
+        try:
+            if not folder.exists():
+                continue
+            for entry in folder.iterdir():
+                info = entry.lstat()
+                if stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
                     continue
-                if expected_ext and entry.suffix.lower() != expected_ext:
+                try:
+                    validate_filename(entry.name)
+                    _checked_path(entry, default=is_default)
+                except UnsafeFilePathError:
+                    logger.warning("文件列表已跳过不安全或非普通文件条目")
                     continue
-                names.add(entry.name)
+                if entry.is_file() and (not expected_ext or entry.suffix.lower() == expected_ext):
+                    names.add(entry.name)
+        except OSError:
+            logger.warning("读取作用域文件列表失败")
+            raise
 
     return sorted(names)
 

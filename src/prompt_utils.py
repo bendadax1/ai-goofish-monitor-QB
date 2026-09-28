@@ -10,6 +10,8 @@ import httpx
 from openai import APITimeoutError, AsyncOpenAI
 
 from src import config
+from src.ai_response import extract_final_text
+from src.httpx_compat import create_sdk_http_client
 from src.logging_config import get_logger
 from src.config import STORAGE_BACKEND
 from src.portable.app_paths import get_portable_runtime_paths
@@ -165,6 +167,10 @@ def _resolve_criteria_ai_runtime(owner_id: Optional[str]) -> Tuple[AsyncOpenAI, 
             )
             client_kwargs["http_client"] = http_async_client
 
+        if http_async_client is None:
+            http_async_client = create_sdk_http_client(timeout=CRITERIA_REQUEST_TIMEOUT_SECONDS)
+            client_kwargs["http_client"] = http_async_client
+
         return AsyncOpenAI(**client_kwargs), model_name, http_async_client
 
     if not config.client:
@@ -242,12 +248,8 @@ async def generate_criteria(user_description: str, reference_file_path: str, own
                 temperature=0.5 # Lower temperature for more predictable structure
             )
         )
-        generated_text = response.choices[0].message.content
+        generated_text = extract_final_text(response)
         logger.info("AI已成功生成内容。", extra={"event": "criteria_response"})
-        
-        # 处理content可能为None的情况
-        if generated_text is None:
-            raise RuntimeError("AI返回的内容为空，请检查模型配置或重试。")
 
         cleaned_text = sanitize_generated_criteria(generated_text)
         if cleaned_text != generated_text.strip():

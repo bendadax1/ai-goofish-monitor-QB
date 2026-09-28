@@ -83,6 +83,8 @@ def _apply_owner_ai_env_overrides(child_env: Dict[str, str], owner_id: Optional[
             "PROXY_AI_ENABLED",
             "AI_MAX_TOKENS_PARAM_NAME",
             "AI_MAX_TOKENS_LIMIT",
+            "AI_PARAMETER_FALLBACK_ENABLED",
+            "AI_REASONING_FALLBACK_ENABLED",
         ]:
             child_env.pop(key, None)
 
@@ -92,6 +94,12 @@ def _apply_owner_ai_env_overrides(child_env: Dict[str, str], owner_id: Optional[
         child_env["GOOFISH_PROXY_URL"] = str(extra_config.get("PROXY_URL") or "").strip()
         child_env["GOOFISH_AI_MAX_TOKENS_PARAM_NAME"] = str(extra_config.get("AI_MAX_TOKENS_PARAM_NAME") or "").strip()
         child_env["GOOFISH_AI_MAX_TOKENS_LIMIT"] = str(extra_config.get("AI_MAX_TOKENS_LIMIT") or "").strip()
+        child_env["GOOFISH_AI_PARAMETER_FALLBACK_ENABLED"] = str(
+            extra_config.get("AI_PARAMETER_FALLBACK_ENABLED") is True
+        ).lower()
+        child_env["GOOFISH_AI_REASONING_FALLBACK_ENABLED"] = str(
+            extra_config.get("AI_REASONING_FALLBACK_ENABLED") is True
+        ).lower()
         child_env["GOOFISH_PROXY_AI_ENABLED"] = str(
             _parse_bool_for_env(extra_config.get("PROXY_AI_ENABLED"), default=False)
         ).lower()

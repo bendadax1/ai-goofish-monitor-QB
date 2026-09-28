@@ -1,6 +1,7 @@
 import os
 import aiofiles
 import json
+from functools import wraps
 from typing import Optional
 from urllib.parse import quote, unquote, urlparse
 from fastapi import APIRouter, HTTPException, Depends
@@ -25,7 +26,8 @@ from src.portable.app_paths import (
     portable_worker_command,
     portable_worker_environment,
 )
-from src.user_file_store import list_scoped_files, resolve_scoped_path
+from src.user_file_store import get_shared_path, list_scoped_files, resolve_scoped_path
+from src.file_safety import UnsafeFilePathError, validate_filename
 from src.web.ai_health import get_ai_health_snapshot, invalidate_ai_health_snapshot
 from src.web.auth import require_auth, check_permission, has_category, get_user_management_level
 
@@ -74,7 +76,13 @@ _NTFY_DEFAULT_SERVER = "https://ntfy.sh"
 
 
 def _normalize_ntfy_server_url(value: str) -> str:
-    return str(value or "").strip().rstrip("/").lower() or _NTFY_DEFAULT_SERVER
+    raw = str(value or "").strip().rstrip("/") or _NTFY_DEFAULT_SERVER
+    # 主机名不区分大小写，但反向代理路径可能区分；不能把新路径当原凭据目标。
+    try:
+        parsed = urlparse(raw)
+        return parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower()).geturl()
+    except ValueError:
+        return raw
 
 
 def _current_ntfy_server_url() -> str:
@@ -106,7 +114,8 @@ def _apply_ntfy_legacy_settings(settings_dict: dict) -> dict:
             from src.notifier.config import parse_legacy_ntfy_url
             parsed = parse_legacy_ntfy_url(legacy)
             if parsed:
-                merged.setdefault("NTFY_SERVER_URL", parsed[0])
+                if not str(merged.get("NTFY_SERVER_URL") or "").strip():
+                    merged["NTFY_SERVER_URL"] = parsed[0]
                 merged["NTFY_TOPIC"] = parsed[1]
                 if not str(merged.get("NTFY_TOKEN") or "").strip() and parsed[2]:
                     merged["NTFY_TOKEN"] = parsed[2]
@@ -123,19 +132,24 @@ def _prepare_notification_settings_update(settings_dict: dict) -> dict:
     """规范化通知更新，并在 ntfy 服务器变化时阻止复用旧 token。"""
     merged = _apply_ntfy_legacy_settings(settings_dict)
     clear_ntfy_token = bool(merged.pop("NTFY_TOKEN_CLEAR", False))
-    if clear_ntfy_token:
-        merged["NTFY_TOKEN"] = ""
+    ntfy_keys = {"NTFY_SERVER_URL", "NTFY_TOPIC", "NTFY_TOKEN", "NTFY_TOPIC_URL"}
+    if clear_ntfy_token or ntfy_keys.intersection(settings_dict):
+        current = _apply_ntfy_legacy_settings({key: get_env_value(key, "") for key in ntfy_keys})
+        # 保留旧配置的有效目标；一旦编辑 ntfy 目标/凭据，统一保存为独立字段。
+        if "NTFY_TOPIC_URL" in settings_dict and not str(settings_dict.get("NTFY_TOPIC_URL") or "").strip() and "NTFY_TOPIC" not in settings_dict:
+            merged["NTFY_TOPIC"] = ""
+        for key in ("NTFY_SERVER_URL", "NTFY_TOPIC"):
+            if key not in merged:
+                merged[key] = current.get(key, "")
+        server_changed = _normalize_ntfy_server_url(merged.get("NTFY_SERVER_URL")) != _current_ntfy_server_url()
+        if clear_ntfy_token:
+            merged["NTFY_TOKEN"] = ""
+        elif not str(merged.get("NTFY_TOKEN") or "").strip():
+            merged["NTFY_TOKEN"] = "" if server_changed else current.get("NTFY_TOKEN", "")
+        # 显式清空旧组合字段，阻止清除后被发送端的 legacy fallback 重新拾取。
+        merged["NTFY_TOPIC_URL"] = ""
         return _preserve_secret_on_empty(merged, _NOTIFICATION_SECRET_KEYS - {"NTFY_TOKEN"})
-
-    requested_server = merged.get("NTFY_SERVER_URL")
-    server_changed = (
-        requested_server is not None
-        and _normalize_ntfy_server_url(requested_server) != _current_ntfy_server_url()
-    )
-    return _preserve_secret_on_empty(
-        merged,
-        _NOTIFICATION_SECRET_KEYS if not server_changed else _NOTIFICATION_SECRET_KEYS - {"NTFY_TOKEN"},
-    )
+    return _preserve_secret_on_empty(merged, _NOTIFICATION_SECRET_KEYS)
 
 
 def _reset_storage_runtime_caches():
@@ -215,23 +229,31 @@ def _require_generic_settings_modify_admin(user: dict = Depends(require_auth)) -
 
 def _validate_safe_filename(filename: str, required_ext: str = "") -> str:
     """校验文件名，阻断路径穿越与平台相关路径写入。"""
-    safe_name = (filename or "").strip()
-    if required_ext and safe_name and not safe_name.lower().endswith(required_ext.lower()):
-        safe_name = f"{safe_name}{required_ext}"
-    if not safe_name:
-        raise HTTPException(status_code=400, detail="无效的文件名。")
-    if any(token in safe_name for token in ("/", "\\", "\x00")):
-        raise HTTPException(status_code=400, detail="无效的文件名。")
-    if ":" in safe_name:
-        raise HTTPException(status_code=400, detail="无效的文件名。")
-    if safe_name in {".", ".."} or ".." in safe_name:
-        raise HTTPException(status_code=400, detail="无效的文件名。")
-    if os.path.basename(safe_name) != safe_name:
-        raise HTTPException(status_code=400, detail="无效的文件名。")
-    drive, _ = os.path.splitdrive(safe_name)
-    if drive or os.path.isabs(safe_name):
-        raise HTTPException(status_code=400, detail="无效的文件名。")
+    try:
+        safe_name = validate_filename(filename)
+        if required_ext and not safe_name.lower().endswith(required_ext.lower()):
+            safe_name = validate_filename(f"{safe_name}{required_ext}")
+    except UnsafeFilePathError:
+        raise HTTPException(status_code=400, detail="无效的文件名。") from None
     return safe_name
+
+
+def _file_operation_error(error: Exception) -> HTTPException:
+    """文件错误只记录类型，不向客户端输出磁盘路径或底层异常。"""
+    logger.warning("文件操作失败", extra={"event": "settings_file_operation_failed", "error_type": type(error).__name__})
+    if isinstance(error, UnsafeFilePathError):
+        return HTTPException(status_code=400, detail="文件路径不安全或目标不是普通文件。")
+    return HTTPException(status_code=500, detail="文件操作失败，请查看服务日志。")
+
+
+def _file_api_errors(function):
+    @wraps(function)
+    async def wrapped(*args, **kwargs):
+        try:
+            return await function(*args, **kwargs)
+        except (UnsafeFilePathError, OSError, UnicodeError) as error:
+            raise _file_operation_error(error) from None
+    return wrapped
 
 
 def _preserve_secret_on_empty(settings_dict: dict, secret_keys: set) -> dict:
@@ -295,6 +317,8 @@ def _build_ai_settings_from_user_api_config(user_api_config: dict) -> dict:
         "PROXY_URL": str(extra_config.get("PROXY_URL") or "").strip(),
         "AI_MAX_TOKENS_PARAM_NAME": str(extra_config.get("AI_MAX_TOKENS_PARAM_NAME") or "").strip(),
         "AI_MAX_TOKENS_LIMIT": normalized_tokens_limit,
+        "AI_PARAMETER_FALLBACK_ENABLED": extra_config.get("AI_PARAMETER_FALLBACK_ENABLED") is True,
+        "AI_REASONING_FALLBACK_ENABLED": extra_config.get("AI_REASONING_FALLBACK_ENABLED") is True,
     }
 
 
@@ -522,6 +546,7 @@ async def get_system_status(user: dict = Depends(_require_settings_admin)):
 
 
 @router.get("/api/prompts")
+@_file_api_errors
 async def list_prompts(user: dict = Depends(_require_ai_or_tasks_access)):
     """列出 Prompt 模板文件名。"""
     owner_id = _resolve_owner_for_scoped_files(user)
@@ -538,6 +563,7 @@ async def list_prompts(user: dict = Depends(_require_ai_or_tasks_access)):
 
 
 @router.post("/api/prompts")
+@_file_api_errors
 async def create_new_prompt(new_prompt: NewPromptRequest, user: dict = Depends(_require_ai_access)):
     """创建一个新的 prompt 文件。"""
     safe_filename = _validate_safe_filename(new_prompt.filename, required_ext=".txt")
@@ -567,10 +593,11 @@ async def create_new_prompt(new_prompt: NewPromptRequest, user: dict = Depends(_
             await f.write(new_prompt.content)
         return {"message": f"Prompt 文件 '{safe_filename}' 创建成功。"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"创建 Prompt 文件时出错: {e}")
+        raise _file_operation_error(e) from None
 
 
 @router.get("/api/prompts/{filename}")
+@_file_api_errors
 async def get_prompt_content(filename: str, user: dict = Depends(_require_ai_or_tasks_access)):
     """获取指定 prompt 文件的内容。"""
     safe_filename = _validate_safe_filename(filename, required_ext=".txt")
@@ -595,6 +622,7 @@ async def get_prompt_content(filename: str, user: dict = Depends(_require_ai_or_
 
 
 @router.get("/api/criteria")
+@_file_api_errors
 async def list_criteria_files(user: dict = Depends(_require_ai_or_tasks_access)):
     """列出 criteria/ 目录下的所有 .txt 文件。"""
     owner_id = _resolve_owner_for_scoped_files(user)
@@ -602,6 +630,7 @@ async def list_criteria_files(user: dict = Depends(_require_ai_or_tasks_access))
 
 
 @router.get("/api/criteria/{filename}")
+@_file_api_errors
 async def get_criteria_content(filename: str, user: dict = Depends(_require_ai_or_tasks_access)):
     """获取指定 criteria 文件的内容。"""
     safe_filename = _validate_safe_filename(filename)
@@ -632,6 +661,7 @@ async def get_criteria_content(filename: str, user: dict = Depends(_require_ai_o
 
 
 @router.put("/api/criteria/{filename}")
+@_file_api_errors
 async def update_criteria_content(filename: str, prompt_update: PromptUpdate, user: dict = Depends(_require_ai_or_tasks_access)):
     """更新指定 criteria 文件的内容。"""
     safe_filename = _validate_safe_filename(filename)
@@ -644,13 +674,13 @@ async def update_criteria_content(filename: str, prompt_update: PromptUpdate, us
                 "requirement",
                 safe_filename,
                 owner_id=owner_id,
-                for_write=True if owner_id else False,
+                for_write=True,
             )
             async with aiofiles.open(str(write_path), 'w', encoding='utf-8') as f:
                 await f.write(prompt_update.content)
             return {"message": f"Requirement 文件 '{safe_filename}' 更新成功。"}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"写入 Requirement 文件时出错: {e}")
+            raise _file_operation_error(e) from None
 
     filepath = resolve_scoped_path("criteria", safe_filename, owner_id=owner_id, for_write=False)
     if not filepath.exists():
@@ -661,16 +691,17 @@ async def update_criteria_content(filename: str, prompt_update: PromptUpdate, us
             "criteria",
             safe_filename,
             owner_id=owner_id,
-            for_write=True if owner_id else False,
+            for_write=True,
         )
         async with aiofiles.open(str(write_path), 'w', encoding='utf-8') as f:
             await f.write(prompt_update.content)
         return {"message": f"Criteria 文件 '{safe_filename}' 更新成功。"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"写入 Criteria 文件时出错: {e}")
+        raise _file_operation_error(e) from None
 
 
 @router.put("/api/prompts/{filename}")
+@_file_api_errors
 async def update_prompt_content(filename: str, prompt_update: PromptUpdate, user: dict = Depends(_require_ai_access)):
     """更新指定 prompt 文件的内容。"""
     safe_filename = _validate_safe_filename(filename, required_ext=".txt")
@@ -700,16 +731,17 @@ async def update_prompt_content(filename: str, prompt_update: PromptUpdate, user
             "prompts",
             safe_filename,
             owner_id=owner_id,
-            for_write=True if owner_id else False,
+            for_write=True,
         )
         async with aiofiles.open(str(write_path), 'w', encoding='utf-8') as f:
             await f.write(prompt_update.content)
         return {"message": f"Prompt 文件 '{safe_filename}' 更新成功。"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"写入 Prompt 文件时出错: {e}")
+        raise _file_operation_error(e) from None
 
 
 @router.get("/api/bayes")
+@_file_api_errors
 async def list_bayes_profiles(user: dict = Depends(_require_ai_or_tasks_access)):
     """列出 Bayes 配置文件名。"""
     owner_id = _resolve_owner_for_scoped_files(user)
@@ -734,6 +766,7 @@ async def list_bayes_profiles(user: dict = Depends(_require_ai_or_tasks_access))
 
 
 @router.post("/api/bayes")
+@_file_api_errors
 async def create_bayes_profile(new_profile: NewPromptRequest, user: dict = Depends(_require_ai_access)):
     """创建一个新的 Bayes 参数文件。"""
     safe_filename = _validate_safe_filename(new_profile.filename, required_ext=".json")
@@ -764,10 +797,11 @@ async def create_bayes_profile(new_profile: NewPromptRequest, user: dict = Depen
             await f.write(new_profile.content)
         return {"message": f"Bayes 文件 '{safe_filename}' 创建成功。"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"创建 Bayes 文件时出错: {e}")
+        raise _file_operation_error(e) from None
 
 
 @router.get("/api/bayes/{filename}")
+@_file_api_errors
 async def get_bayes_profile(filename: str, user: dict = Depends(_require_ai_or_tasks_access)):
     """获取指定 Bayes 参数文件的内容。"""
     safe_filename = _validate_safe_filename(filename, required_ext=".json")
@@ -799,6 +833,7 @@ async def get_bayes_profile(filename: str, user: dict = Depends(_require_ai_or_t
 
 
 @router.put("/api/bayes/{filename}")
+@_file_api_errors
 async def update_bayes_profile(filename: str, bayes_update: BayesUpdate, user: dict = Depends(_require_ai_access)):
     """更新指定 Bayes 参数文件的内容。"""
     safe_filename = _validate_safe_filename(filename, required_ext=".json")
@@ -828,16 +863,17 @@ async def update_bayes_profile(filename: str, bayes_update: BayesUpdate, user: d
             "bayes",
             safe_filename,
             owner_id=owner_id,
-            for_write=True if owner_id else False,
+            for_write=True,
         )
         async with aiofiles.open(str(write_path), 'w', encoding='utf-8') as f:
             await f.write(bayes_update.content)
         return {"message": f"Bayes 文件 '{safe_filename}' 更新成功。"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"写入 Bayes 文件时出错: {e}")
+        raise _file_operation_error(e) from None
 
 
 @router.delete("/api/bayes/{filename}")
+@_file_api_errors
 async def delete_bayes_profile(filename: str, user: dict = Depends(_require_ai_access)):
     """删除指定的 Bayes 参数文件。"""
     safe_filename = _validate_safe_filename(filename, required_ext=".json")
@@ -880,19 +916,21 @@ async def delete_bayes_profile(filename: str, user: dict = Depends(_require_ai_a
                     return {"message": f"Bayes 文件 '{safe_filename}' 的个人副本已删除（系统共享模板仍保留）。"}
                 return {"message": f"Bayes 文件 '{safe_filename}' 删除成功。"}
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"删除 Bayes 文件时出错: {e}")
+                raise _file_operation_error(e) from None
         if shared_path.exists():
             raise HTTPException(status_code=400, detail="该 Bayes 文件为系统共享模板，当前账号不能直接删除。")
         raise HTTPException(status_code=404, detail="Bayes 文件未找到。")
 
-    filepath = resolve_scoped_path("bayes", safe_filename, owner_id=None, for_write=False)
+    filepath = get_shared_path("bayes", safe_filename)
     if not filepath.exists():
+        if resolve_scoped_path("bayes", safe_filename, owner_id=None, for_write=False).exists():
+            raise HTTPException(status_code=400, detail="内置默认模板不能删除，请创建可写副本。")
         raise HTTPException(status_code=404, detail="Bayes 文件未找到。")
     try:
         os.remove(str(filepath))
         return {"message": f"Bayes 文件 '{safe_filename}' 删除成功。"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除 Bayes 文件时出错: {e}")
+        raise _file_operation_error(e) from None
 
 
 
@@ -912,6 +950,7 @@ async def get_bayes_guide(_user: dict = Depends(_require_ai_or_tasks_access)):
     return {"filename": "bayes_guide.md", "content": content}
 
 @router.delete("/api/prompts/{filename}")
+@_file_api_errors
 async def delete_prompt(filename: str, user: dict = Depends(_require_ai_access)):
     """删除指定的 prompt 文件。"""
     safe_filename = _validate_safe_filename(filename, required_ext=".txt")
@@ -944,19 +983,21 @@ async def delete_prompt(filename: str, user: dict = Depends(_require_ai_access))
                     return {"message": f"Prompt 文件 '{safe_filename}' 的个人副本已删除（系统共享模板仍保留）。"}
                 return {"message": f"Prompt 文件 '{safe_filename}' 删除成功。"}
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"删除 Prompt 文件时出错: {e}")
+                raise _file_operation_error(e) from None
         if shared_path.exists():
             raise HTTPException(status_code=400, detail="该 Prompt 文件为系统共享模板，当前账号不能直接删除。")
         raise HTTPException(status_code=404, detail="Prompt 文件未找到。")
 
-    filepath = resolve_scoped_path("prompts", safe_filename, owner_id=None, for_write=False)
+    filepath = get_shared_path("prompts", safe_filename)
     if not filepath.exists():
+        if resolve_scoped_path("prompts", safe_filename, owner_id=None, for_write=False).exists():
+            raise HTTPException(status_code=400, detail="内置默认模板不能删除，请创建可写副本。")
         raise HTTPException(status_code=404, detail="Prompt 文件未找到。")
     try:
         os.remove(str(filepath))
         return {"message": f"Prompt 文件 '{safe_filename}' 删除成功。"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除 Prompt 文件时出错: {e}")
+        raise _file_operation_error(e) from None
 
 
 async def _cleanup_login_process(process):
@@ -1055,10 +1096,13 @@ async def get_notification_settings(_user: dict = Depends(_require_notify_access
             settings[key] = get_env_value(key)
     
     # 保留旧客户端读取字段，但不回显 token 到组合 URL。
+    settings = _apply_ntfy_legacy_settings(settings)
+    settings["NTFY_TOKEN_SET"] = bool(settings.get("NTFY_TOKEN_SET") or settings.get("NTFY_TOKEN"))
+    settings["NTFY_TOKEN"] = ""
     topic = str(settings.get("NTFY_TOPIC") or "").strip()
     server = str(settings.get("NTFY_SERVER_URL") or "").strip().rstrip("/") or _NTFY_DEFAULT_SERVER
     settings["NTFY_TOPIC_URL"] = (
-        f"{server}/{topic}" if topic else str(settings.get("NTFY_TOPIC_URL") or "")
+        f"{server}/{topic}" if topic else ""
     )
     settings["NTFY_TOKEN_CLEAR"] = False
     return settings
@@ -1074,7 +1118,7 @@ async def update_notification_settings(settings: NotificationSettings, _user: di
         )
 
     try:
-        settings_dict = _prepare_notification_settings_update(settings.model_dump(exclude_none=True))
+        settings_dict = _prepare_notification_settings_update(settings.model_dump(exclude_none=True, exclude_unset=True))
         notification_keys = [
             "NTFY_TOPIC", "NTFY_SERVER_URL", "NTFY_TOKEN", "NTFY_TOPIC_URL", "NTFY_ENABLED", "GOTIFY_URL", "GOTIFY_TOKEN", "GOTIFY_ENABLED",
             "BARK_URL", "BARK_ENABLED", "WX_BOT_URL", "WX_BOT_ENABLED", "WX_CORP_ID", "WX_AGENT_ID",
@@ -1194,6 +1238,8 @@ async def get_ai_settings(user: dict = Depends(_require_ai_or_tasks_access)):
         "PROXY_URL",
         "AI_MAX_TOKENS_PARAM_NAME",
         "AI_MAX_TOKENS_LIMIT",
+        "AI_PARAMETER_FALLBACK_ENABLED",
+        "AI_REASONING_FALLBACK_ENABLED",
     ]
     
     settings = {}
@@ -1202,6 +1248,8 @@ async def get_ai_settings(user: dict = Depends(_require_ai_or_tasks_access)):
             secret_value = get_env_value(key, "")
             settings[key] = ""
             settings[f"{key}_SET"] = bool(secret_value)
+        elif key in {"AI_PARAMETER_FALLBACK_ENABLED", "AI_REASONING_FALLBACK_ENABLED"}:
+            settings[key] = str(get_env_value(key, "false")).strip().lower() == "true"
         else:
             settings[key] = get_env_value(key)
 
@@ -1218,6 +1266,10 @@ async def get_ai_settings(user: dict = Depends(_require_ai_or_tasks_access)):
 async def update_ai_settings(settings: dict, user: dict = Depends(_require_ai_access)):
     """更新AI模型设置。"""
     try:
+        if "AI_PARAMETER_FALLBACK_ENABLED" in settings and not isinstance(settings["AI_PARAMETER_FALLBACK_ENABLED"], bool):
+            raise HTTPException(status_code=400, detail="AI_PARAMETER_FALLBACK_ENABLED 必须是布尔值。")
+        if "AI_REASONING_FALLBACK_ENABLED" in settings and not isinstance(settings["AI_REASONING_FALLBACK_ENABLED"], bool):
+            raise HTTPException(status_code=400, detail="AI_REASONING_FALLBACK_ENABLED 必须是布尔值。")
         if STORAGE_BACKEND() == "postgres":
             user_id = _resolve_current_user_id(user)
             storage = get_storage()
@@ -1245,7 +1297,7 @@ async def update_ai_settings(settings: dict, user: dict = Depends(_require_ai_ac
                     if model_value != str(existing.get("model") or "").strip():
                         field_updates["model"] = model_value
                 existing_extra = existing.get("extra_config") if isinstance(existing.get("extra_config"), dict) else {}
-                for key in ("PROXY_URL", "AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT"):
+                for key in ("PROXY_URL", "AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT", "AI_PARAMETER_FALLBACK_ENABLED", "AI_REASONING_FALLBACK_ENABLED"):
                     if key not in settings:
                         continue
                     value = settings.get(key)
@@ -1302,7 +1354,7 @@ async def update_ai_settings(settings: dict, user: dict = Depends(_require_ai_ac
             existing_extra_config = existing.get("extra_config") if isinstance(existing.get("extra_config"), dict) else {}
             merged_extra_config = dict(existing_extra_config)
 
-            for key in ["PROXY_URL", "AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT"]:
+            for key in ["PROXY_URL", "AI_MAX_TOKENS_PARAM_NAME", "AI_MAX_TOKENS_LIMIT", "AI_PARAMETER_FALLBACK_ENABLED", "AI_REASONING_FALLBACK_ENABLED"]:
                 if key in settings and settings.get(key) not in (None, ""):
                     if key == "AI_MAX_TOKENS_LIMIT":
                         try:
@@ -1362,6 +1414,8 @@ async def update_ai_settings(settings: dict, user: dict = Depends(_require_ai_ac
             "PROXY_URL",
             "AI_MAX_TOKENS_PARAM_NAME",
             "AI_MAX_TOKENS_LIMIT",
+            "AI_PARAMETER_FALLBACK_ENABLED",
+            "AI_REASONING_FALLBACK_ENABLED",
         ]
         merged_settings = _preserve_secret_on_empty(settings, _AI_SECRET_KEYS)
         save_env_settings(merged_settings, ai_keys)

@@ -49,6 +49,12 @@ from src.utils import (
     log_time,
 )
 from src.portable.app_paths import get_portable_runtime_paths, portable_browser_executable
+from src.search_requests import (
+    advance_search_page,
+    build_extra_headers as _build_extra_headers,
+    capture_new_request_response as _capture_new_request_response,
+    expect_new_search_response as _expect_new_search_response,
+)
 
 # 新结构下推荐等级的推荐集合（与运行期口径一致）
 RECOMMENDED_LEVELS = {"STRONG_BUY", "CAUTIOUS_BUY", "CONDITIONAL_BUY"}
@@ -408,40 +414,6 @@ def _build_mobile_init_script(snapshot: Optional[dict]) -> str:
             }}
         }}
     """
-
-
-def _build_extra_headers(raw_headers: Optional[dict]) -> dict:
-    if not raw_headers:
-        return {}
-    # Chromium 禁止覆盖浏览器自管的请求头，强制覆盖会让所有子资源请求
-    # 直接以 net::ERR_INVALID_ARGUMENT 失败，导致页面 SPA 无法加载、API 不触发。
-    # Sec-Fetch-* 是 Fetch Metadata 头，必须排除（快照里可能是旧扩展/登录流程带进来的）。
-    excluded = {
-        "cookie",
-        "content-length",
-        "host",
-        "sec-fetch-site",
-        "sec-fetch-mode",
-        "sec-fetch-dest",
-        "sec-fetch-user",
-    }
-    headers = {}
-    for key, value in raw_headers.items():
-        if not key or key.lower() in excluded or value is None:
-            continue
-        headers[key] = value
-    return headers
-
-
-async def _capture_new_request_response(page, url_pattern: str, action, timeout_ms: int = 12000):
-    """只绑定 action 之后新发出的请求，避免被此前在途响应抢占。"""
-    async with page.expect_request(
-        lambda request: url_pattern in request.url,
-        timeout=timeout_ms,
-    ) as request_info:
-        await action()
-    submitted_request = await request_info.value
-    return await submitted_request.response()
 
 
 COOKIE_ALLOWED_DOMAINS = ("goofish.com",)
@@ -1228,12 +1200,12 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
             search_url = f"https://www.goofish.com/search?{urlencode(params)}"
             log_time(f"学习用公开平台URL: {search_url}", task_name=task_name)
 
-            # 使用 expect_response 在导航的同时捕获初始搜索的API数据
+            # 绑定本次导航新发出的搜索请求，避免前次在途响应抢占。
             # 若被引导到登录确认页导致超时，则尝试“快速进入”后重试一次
             initial_response = None
             for attempt in (1, 2):
                 try:
-                    async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=30000) as response_info:
+                    async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=30000) as response_info:
                         await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
                     initial_response = await response_info.value
                     break
@@ -1316,7 +1288,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 try:
                     await page.click('text=新发布')
                     await random_sleep(1, 2)
-                    async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=20000) as response_info:
+                    async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
                         await page.click(f"text={new_publish_option}")
                         await random_sleep(2, 4)
                     final_response = await response_info.value
@@ -1327,14 +1299,14 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
             else:
                 await page.click('text=新发布')
                 await random_sleep(2, 4) # 原来是 (1.5, 2.5)
-                async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=20000) as response_info:
+                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
                     await page.click('text=最新')
                     # --- 修改: 增加排序后的等待时间 ---
                     await random_sleep(4, 7) # 原来是 (3, 5)
                 final_response = await response_info.value
 
             if personal_only:
-                async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=20000) as response_info:
+                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
                     await page.click('text=个人闲置')
                     # --- 修改: 将固定等待改为随机等待，并加长 ---
                     await random_sleep(4, 6) # 原来是 asyncio.sleep(5)
@@ -1344,7 +1316,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 try:
                     free_shipping_trigger = page.get_by_text("包邮", exact=True)
                     if await free_shipping_trigger.count():
-                        async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=20000) as response_info:
+                        async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
                             await free_shipping_trigger.first.click()
                             await random_sleep(2, 4)
                         final_response = await response_info.value
@@ -1362,7 +1334,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 try:
                     trigger = page.get_by_text(label, exact=True)
                     if await trigger.count():
-                        async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=20000) as response_info:
+                        async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
                             await trigger.first.click()
                             await random_sleep(2, 4)
                         final_response = await response_info.value
@@ -1437,7 +1409,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                         search_btn = popover.locator("div.searchBtn--Ic6RKcAb").first
                         if await search_btn.count():
                             try:
-                                async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=20000) as response_info:
+                                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
                                     await search_btn.click()
                                     await random_sleep(2, 3)
                                 final_response = await response_info.value
@@ -1784,7 +1756,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                     f"价格排序第{attempt}/{price_sort_retry}次 stage=click_sent target={option_label} candidate={chosen['text']}",
                     task_name=task_name,
                 )
-                async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=timeout_ms) as response_info:
+                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=timeout_ms) as response_info:
                     await chosen["node"].click(timeout=3000)
                     await random_sleep(0.8, 1.2)
                 return await response_info.value, top_candidates
@@ -2230,7 +2202,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                             f"价格筛选第{attempt}/{max_price_retry}次提交完成但响应异常，准备重试。",
                             task_name=task_name,
                         )
-                    except PlaywrightTimeoutError:
+                    except (PlaywrightTimeoutError, asyncio.TimeoutError):
                         try:
                             min_actual = await min_input.input_value() if min_input is not None else "n/a"
                         except Exception:
@@ -2275,18 +2247,14 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 log_time(f"开始处理第 {page_num}/{max_pages} 页 ...", task_name=task_name)
 
                 if page_num > 1:
-                    # 查找未被禁用的“下一页”按钮。闲鱼通过添加 'disabled' 类名来禁用按钮，而不是使用 disabled 属性。
-                    next_btn = page.locator("[class*='search-pagination-arrow-right']:not([class*='disabled'])")
-                    if not await next_btn.count():
-                        log_time("已到达最后一页，未找到可用的‘下一页’按钮，停止翻页。", task_name=task_name)
-                        break
                     try:
-                        async with page.expect_response(lambda r: API_URL_PATTERN in r.url, timeout=20000) as response_info:
-                            await next_btn.click()
-                            # --- 修改: 增加翻页后的等待时间 ---
-                            await random_sleep(5, 8) # 原来是 (1.5, 3.5)
-                        current_response = await response_info.value
-                    except PlaywrightTimeoutError:
+                        current_response = await advance_search_page(
+                            page, API_URL_PATTERN, random_sleep, timeout_ms=20000,
+                        )
+                        if current_response is None:
+                            log_time("未找到可用的下一页按钮或翻页响应，停止翻页。", task_name=task_name)
+                            break
+                    except (PlaywrightTimeoutError, asyncio.TimeoutError):
                         log_time(f"翻页到第 {page_num} 页超时，停止翻页。", task_name=task_name)
                         end_reason = "操作终止-结束原因：翻页超时，停止翻页"
                         break

@@ -16,8 +16,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+from types import ModuleType
 from typing import Any, Sequence
 import uuid
+from unittest import mock
 
 import psycopg2
 from psycopg2 import sql
@@ -120,7 +122,94 @@ def _assert_initialized(
         raise pg.SmokeFailure("probe role cannot read schema version")
 
 
-def _run_schema_cases(*, port: int, admin: str, password: str, app: str, probe: str, raw_secrets: list[str], test_root: Path) -> None:
+def _check_real_prompt_route_ownership(
+    *, port: int, database: str, admin: str, password: str,
+    app: str, app_password: str, first_owner: str,
+) -> None:
+    """用真实 PG 适配器和 FastAPI 路由核对私有 Prompt 的所有权。"""
+    # 不读取项目 .env：适配器只需要这些导入期符号，本用例不执行配置初始化。
+    config = ModuleType("src.config")
+    config.PORTABLE_MODE = True
+    config.WEB_USERNAME = lambda: "synthetic"
+    config.WEB_PASSWORD = lambda: "synthetic"
+    with mock.patch.dict(sys.modules, {"src.config": config}):
+        from src.storage.postgres_adapter import PostgresAdapter
+        from tests.test_upstream_file_safety import load_settings
+
+    second_owner = str(uuid.uuid4())
+    suffix = uuid.uuid4().hex
+    private_name = f"跨用户验收-{suffix}.txt"
+    shared_name = f"系统验收-{suffix}.txt"
+    _query(
+        port, database, admin, password,
+        "INSERT INTO public.users (id, username, password_hash, role, is_active) "
+        "VALUES (%s, %s, 'synthetic-fixture', 'operator', true)",
+        (second_owner, f"pg_file_{suffix}"),
+    )
+    storage = PostgresAdapter(_dsn(port=port, database=database, user=app, password=app_password))
+    current_user = [{"id": first_owner, "categories": ["ai"]}]
+    _, client = load_settings(["postgres"], storage, current_user)
+
+    def status(method: str, url: str, expected: int, **kwargs):
+        response = client.request(method, url, **kwargs)
+        if response.status_code != expected:
+            raise pg.SmokeFailure(f"real Prompt route returned {response.status_code}, expected {expected}")
+        return response
+
+    try:
+        current_user[0] = None
+        status("POST", "/api/prompts", 401, json={"filename": private_name, "content": "blocked"})
+        current_user[0] = {"id": first_owner, "categories": []}
+        status("POST", "/api/prompts", 403, json={"filename": private_name, "content": "blocked"})
+        current_user[0] = {"id": first_owner, "categories": ["ai"]}
+        status("POST", "/api/prompts", 200, json={"filename": private_name, "content": "用户甲初版", "owner_id": second_owner})
+        assert status("GET", f"/api/prompts/{private_name}", 200).json()["content"] == "用户甲初版"
+        assert private_name in status("GET", "/api/prompts", 200).json()
+        if _query(port, database, admin, password,
+                  "SELECT owner_id::text, content FROM public.prompt_templates WHERE name = %s",
+                  (private_name,)) != [(first_owner, "用户甲初版")]:
+            raise pg.SmokeFailure("real Prompt create ignored authenticated owner")
+
+        current_user[0] = {"id": second_owner, "categories": ["ai"]}
+        assert private_name not in status("GET", "/api/prompts", 200).json()
+        status("GET", f"/api/prompts/{private_name}", 404)
+        status("PUT", f"/api/prompts/{private_name}", 404, json={"content": "越权改写"})
+        status("DELETE", f"/api/prompts/{private_name}", 404)
+        status("POST", "/api/prompts", 200, json={"filename": private_name, "content": "用户乙初版"})
+        assert status("GET", f"/api/prompts/{private_name}", 200).json()["content"] == "用户乙初版"
+
+        current_user[0] = {"id": first_owner, "categories": ["ai"]}
+        status("PUT", f"/api/prompts/{private_name}", 200, json={"content": "用户甲新版"})
+        assert status("GET", f"/api/prompts/{private_name}", 200).json()["content"] == "用户甲新版"
+        for name in ("CON.txt", "x.txt:stream", "../escape.txt"):
+            status("POST", "/api/prompts", 400, json={"filename": name, "content": "blocked"})
+        storage.save_prompt_template({"name": shared_name, "content": "共享只读"}, owner_id=None)
+        status("DELETE", f"/api/prompts/{shared_name}", 400)
+        assert status("GET", f"/api/prompts/{shared_name}", 200).json()["content"] == "共享只读"
+        status("DELETE", f"/api/prompts/{private_name}", 200)
+        status("GET", f"/api/prompts/{private_name}", 404)
+
+        current_user[0] = {"id": second_owner, "categories": ["ai"]}
+        assert status("GET", f"/api/prompts/{private_name}", 200).json()["content"] == "用户乙初版"
+        status("DELETE", f"/api/prompts/{private_name}", 200)
+        if _query(port, database, admin, password,
+                  "SELECT count(*) FROM public.prompt_templates WHERE name = %s",
+                  (private_name,)) != [(0,)]:
+            raise pg.SmokeFailure("real Prompt owner deletes left a private row")
+    finally:
+        client.close()
+        storage.engine.dispose()
+        _query(port, database, admin, password,
+               "DELETE FROM public.prompt_templates WHERE name IN (%s, %s)",
+               (private_name, shared_name))
+        _query(port, database, admin, password,
+               "DELETE FROM public.users WHERE id = %s", (second_owner,))
+
+
+def _run_schema_cases(
+    *, port: int, admin: str, password: str, app: str, probe: str,
+    raw_secrets: list[str], test_root: Path, prompt_only: bool = False,
+) -> None:
     database = _database_name()
     app_password, probe_password = _create_role_and_database(port=port, admin=admin, password=password, app=app, probe=probe, database=database, raw_secrets=raw_secrets)
     engine = _admin_engine(port=port, database=database, user=admin, password=password)
@@ -148,6 +237,12 @@ def _run_schema_cases(*, port: int, admin: str, password: str, app: str, probe: 
             app_engine.dispose()
         if not identifier or _query(port, database, admin, password, "SELECT count(*) FROM public.users") != [(1,)]:
             raise pg.SmokeFailure("first administrator was not created exactly once")
+        _check_real_prompt_route_ownership(
+            port=port, database=database, admin=admin, password=password,
+            app=app, app_password=app_password, first_owner=identifier,
+        )
+        if prompt_only:
+            return
         _check_real_sessions(port, database, app, app_password, test_root, raw_secrets)
         try:
             schema.create_first_admin(
@@ -477,7 +572,7 @@ def _check_provision(state, port, admin, password, runtime_root):
     check_backup_roundtrip(state, port, admin, password, identifier, runtime_root)
 
 
-def run_smoke(postgres_root: Path | None = None) -> dict[str, str]:
+def run_smoke(postgres_root: Path | None = None, *, prompt_only: bool = False) -> dict[str, str]:
     lock = pg._load_lock()
     runtime_root = pg._runtime_root(lock, postgres_root)
     postgres, initdb, pg_ctl = (runtime_root / "bin" / name for name in ("postgres.exe", "initdb.exe", "pg_ctl.exe"))
@@ -517,7 +612,11 @@ def run_smoke(postgres_root: Path | None = None) -> dict[str, str]:
         pg._run_tool([pg_ctl, "start", "-D", state.data_root, "-l", state.pg_log, "-o", f"-p {port}", "-w", "-t", "30"], stage="schema-pg-start", diagnostic_root=diagnostics, timeout=45, direct_output=True)
         state.postgres_pid = pg._read_owned_postmaster_identity(state).pid
         _check_provision(state, port, admin, password, runtime_root)
-        _run_schema_cases(port=port, admin=admin, password=password, app=app, probe=probe, raw_secrets=state.raw_secrets, test_root=state.root)
+        _run_schema_cases(
+            port=port, admin=admin, password=password, app=app, probe=probe,
+            raw_secrets=state.raw_secrets, test_root=state.root,
+            prompt_only=prompt_only,
+        )
         success = True
         return {"postgres_version": str(lock["version"]), "schema_version": "1", "result": "PASS"}
     finally:

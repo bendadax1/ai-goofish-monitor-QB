@@ -9,6 +9,7 @@ import shutil
 from datetime import datetime
 
 import requests
+from src.ai_response import AIResponseContentError, extract_analysis_candidate
 
 # 设置标准输出编码为UTF-8，解决Windows控制台编码问题
 if sys.platform.startswith('win'):
@@ -25,9 +26,13 @@ from src.config import (
     MODEL_NAME,
     AI_VISION_ENABLED,
     ENABLE_RESPONSE_FORMAT,
+    AI_PARAMETER_FALLBACK_ENABLED,
+    AI_REASONING_FALLBACK_ENABLED,
+    AI_MAX_TOKENS_PARAM_NAME,
     client,
 )
 from src.utils import retry_on_failure
+from src.ai_parameter_fallback import unsupported_optional_parameter
 
 # 商品图片数量上限：站点固定最多9张，运行期用常量兜底
 MAX_PRODUCT_IMAGE_COUNT = 9
@@ -276,6 +281,114 @@ RECOMMENDED_LEVELS = {
 def _is_recommended_level(level):
     """根据推荐等级判断是否属于推荐集合。"""
     return isinstance(level, str) and level in RECOMMENDED_LEVELS
+
+
+def _parse_strict_reasoning_payload(text, *, require_visual_summary=False):
+    """兼容网关候选必须是无重复键的完整业务 JSON，不允许旧回填制造结论。"""
+    statuses = {"PASS", "WARNING", "FAIL"}
+    detail_keys = (
+        "temporal_analysis", "selling_behavior", "buying_behavior",
+        "timeline_consistency", "communication_style", "behavioral_summary",
+    )
+
+    def nonempty_string(value):
+        return isinstance(value, str) and bool(value.strip())
+
+    def string_list(value):
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+    def valid_status(value):
+        return isinstance(value, str) and value in statuses
+
+    def valid_detail(value):
+        return isinstance(value, dict) and all(nonempty_string(value.get(key)) for key in ("comment", "evidence"))
+
+    def valid_visual(value):
+        if not isinstance(value, dict):
+            return False
+        grade = value.get("appearance_grade")
+        return (
+            all(valid_status(value.get(key)) for key in (
+                "image_quality", "defect_visibility", "image_authenticity",
+                "detail_completeness", "text_image_consistency",
+            ))
+            and nonempty_string(value.get("comparison_copy"))
+            and (
+                isinstance(grade, str) and grade in {"A", "B", "C", "1", "2", "3", "4", "5"}
+                or type(grade) is int and 1 <= grade <= 5
+            )
+            and nonempty_string(value.get("appearance_basis"))
+        )
+
+    def reject_constant(_value):
+        raise ValueError("非有限数字")
+
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("重复 JSON 字段")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(text, parse_constant=reject_constant, object_pairs_hook=unique_pairs)
+    except (TypeError, ValueError):
+        raise AIResponseContentError("兼容内容不是完整有效的 JSON 对象。") from None
+    if not isinstance(payload, dict):
+        raise AIResponseContentError("兼容内容缺少完整业务字段。")
+    level = payload.get("recommendation_level")
+    confidence = payload.get("confidence_score")
+    criteria = payload.get("criteria_analysis")
+    seller = criteria.get("seller_type") if isinstance(criteria, dict) else None
+    details = seller.get("analysis_details") if isinstance(seller, dict) else None
+    visual = payload.get("visual_summary")
+    evidence = payload.get("missing_evidence")
+    confidence_ranges = {
+        "STRONG_BUY": (0.9, 1.0),
+        "CAUTIOUS_BUY": (0.7, 0.9),
+        "CONDITIONAL_BUY": (0.5, 0.7),
+        "NOT_RECOMMENDED": (0.0, 0.5),
+    }
+    if not (
+        nonempty_string(payload.get("prompt_version"))
+        and isinstance(level, str) and level in RECOMMENDATION_LEVELS
+        and type(confidence) in (int, float) and 0.0 <= confidence <= 1.0
+        and confidence_ranges[level][0] <= confidence
+        and (
+            confidence <= confidence_ranges[level][1]
+            if level == "STRONG_BUY" else confidence < confidence_ranges[level][1]
+        )
+        and type(payload.get("is_recommended")) is bool
+        and payload["is_recommended"] == _is_recommended_level(level)
+        and nonempty_string(payload.get("reason"))
+        and string_list(payload.get("action_required"))
+        and (level != "CONDITIONAL_BUY" or bool(payload["action_required"]))
+        and string_list(payload.get("risk_tags"))
+        and string_list(payload.get("veto_flags"))
+        and (not payload["veto_flags"] or level == "NOT_RECOMMENDED")
+        and isinstance(evidence, list)
+        and all(
+            isinstance(item, dict)
+            and all(nonempty_string(item.get(key)) for key in ("field", "why", "action"))
+            for item in evidence
+        )
+        and isinstance(criteria, dict) and bool(criteria)
+        and isinstance(seller, dict)
+        and valid_status(seller.get("status"))
+        and nonempty_string(seller.get("persona"))
+        and nonempty_string(seller.get("comment"))
+        and isinstance(details, dict)
+        and all(valid_detail(details.get(key)) for key in detail_keys)
+        and all(
+            key == "seller_type" or valid_detail(value) and valid_status(value.get("status"))
+            for key, value in criteria.items()
+        )
+        and (not require_visual_summary or valid_visual(visual))
+        and (visual is None or valid_visual(visual))
+    ):
+        raise AIResponseContentError("兼容内容缺少完整业务字段。")
+    return payload
 
 
 def _backfill_and_normalize_ai_response(parsed_response):
@@ -553,6 +666,9 @@ async def get_ai_analysis(
 
     # 增强的AI调用，包含更严格的格式控制和重试机制
     max_retries = 3
+    fallback_enabled = AI_PARAMETER_FALLBACK_ENABLED()
+    protected_parameter = AI_MAX_TOKENS_PARAM_NAME()
+    omitted_parameters = set()  # 每次分析独立；不缓存到共享客户端或用户配置。
     for attempt in range(max_retries):
         try:
             # 根据重试次数调整参数
@@ -571,21 +687,36 @@ async def get_ai_analysis(
             if ENABLE_RESPONSE_FORMAT():
                 request_params["response_format"] = {"type": "json_object"}
             
-            response = await client.chat.completions.create(
-                **get_ai_request_params(**request_params)
-            )
+            request_params = get_ai_request_params(**request_params)
+            for parameter in omitted_parameters:
+                request_params.pop(parameter, None)
+            try:
+                response = await client.chat.completions.create(**request_params)
+            except Exception as error:
+                if fallback_enabled and attempt < max_retries - 1:
+                    parameter = unsupported_optional_parameter(
+                        error, request_params, protected_parameter=protected_parameter,
+                    )
+                    if parameter is not None:
+                        omitted_parameters.add(parameter)
+                        safe_print(f"   [AI兼容] 后续已有尝试将省略不支持的参数: {parameter}")
+                # 仍交给原失败计数、阈值及剩余重试预算，不在此额外调用。
+                raise
 
-            # 兼容不同API响应格式，检查response是否为字符串
-            if hasattr(response, 'choices'):
-                ai_response_content = response.choices[0].message.content
-            else:
-                # 如果response是字符串，则直接使用
-                ai_response_content = response
+            # 仅显式开启时读取兼容网关字段；严格业务结构校验先于旧回填和评分。
+            ai_response_content, from_reasoning = extract_analysis_candidate(
+                response, allow_reasoning_content=AI_REASONING_FALLBACK_ENABLED(),
+            )
+            if from_reasoning:
+                _parse_strict_reasoning_payload(ai_response_content, require_visual_summary=bool(selected_urls))
 
             if AI_DEBUG_MODE():
                 safe_print(f"\n--- [AI DEBUG] 第{attempt + 1}次尝试 ---")
-                safe_print("--- RAW AI RESPONSE ---")
-                safe_print(ai_response_content)
+                if from_reasoning:
+                    safe_print("--- 兼容内容已通过结构校验；原文不记录 ---")
+                else:
+                    safe_print("--- RAW AI RESPONSE ---")
+                    safe_print(ai_response_content)
                 safe_print("---------------------\n")
 
             # 尝试直接解析JSON

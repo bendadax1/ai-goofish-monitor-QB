@@ -276,6 +276,7 @@ class TestNotificationRequest(BaseModel):
     config_id: Optional[str] = None
     bound_task: Optional[str] = None
     bound_account: Optional[str] = None
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class TestTaskCompletionNotificationRequest(BaseModel):
@@ -283,6 +284,7 @@ class TestTaskCompletionNotificationRequest(BaseModel):
     config_id: Optional[str] = None
     bound_task: Optional[str] = None
     bound_account: Optional[str] = None
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class TestProductNotificationRequest(BaseModel):
@@ -290,3 +292,4 @@ class TestProductNotificationRequest(BaseModel):
     config_id: Optional[str] = None
     bound_task: Optional[str] = None
     bound_account: Optional[str] = None
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")

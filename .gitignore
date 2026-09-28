@@ -45,7 +45,7 @@ build/
 升级.txt
 upgrade.txt
 docs/
-# 仅纳入便携版正式文档，其他历史文档维持忽略
+# 仅纳入列出的正式文档，其他历史文档维持忽略
 !/docs/
 /docs/*
 !/docs/PORTABLE_LAUNCHER_PLAN.md
@@ -60,6 +60,7 @@ docs/
 !/docs/LAUNCHER_DEVELOPMENT.md
 !/docs/LAUNCHER_REFACTOR_EXECUTION.md
 !/docs/RELEASE_1.1.0.0-beta.md
+!/docs/UPSTREAM_UPGRADE_PLAN.md
 
 
 # 忽略gitignore和dockerignore文件本身

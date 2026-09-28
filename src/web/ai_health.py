@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 import httpx
 import httpcore
 from openai import AsyncOpenAI, OpenAI
+from src.httpx_compat import create_sdk_http_client
 
 import src.config
 from src.config import STORAGE_BACKEND
@@ -290,6 +291,10 @@ def _run_web_text_probe_sync(config: Dict[str, Any]) -> Dict[str, Any]:
             http_client = httpx.Client(proxy=str(config.get("proxy_url")), timeout=30.0)
             client_params["http_client"] = http_client
 
+        if http_client is None:
+            http_client = create_sdk_http_client(asynchronous=False, timeout=30.0)
+            client_params["http_client"] = http_client
+
         client = OpenAI(**client_params)
         client.chat.completions.create(
             **_build_request_kwargs(
@@ -331,6 +336,10 @@ async def _run_backend_text_probe_async(config: Dict[str, Any]) -> Dict[str, Any
         }
         if config.get("proxy_ai_enabled") and config.get("proxy_url"):
             http_async_client = httpx.AsyncClient(proxy=str(config.get("proxy_url")), timeout=30.0)
+            client_params["http_client"] = http_async_client
+
+        if http_async_client is None:
+            http_async_client = create_sdk_http_client(timeout=30.0)
             client_params["http_client"] = http_async_client
 
         client = AsyncOpenAI(**client_params)
@@ -402,6 +411,10 @@ async def _run_vision_probe_async(config: Dict[str, Any]) -> Dict[str, Any]:
         }
         if config.get("proxy_ai_enabled") and config.get("proxy_url"):
             http_async_client = httpx.AsyncClient(proxy=str(config.get("proxy_url")), timeout=30.0)
+            client_params["http_client"] = http_async_client
+
+        if http_async_client is None:
+            http_async_client = create_sdk_http_client(timeout=30.0)
             client_params["http_client"] = http_async_client
 
         client = AsyncOpenAI(**client_params)

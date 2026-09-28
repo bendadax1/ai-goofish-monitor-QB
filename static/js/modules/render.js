@@ -795,6 +795,32 @@ function renderAISettings(settings) {
                 <div class="form-group">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <label class="switch">
+                            <input type="checkbox" id="ai-parameter-fallback-enabled" name="AI_PARAMETER_FALLBACK_ENABLED" aria-label="参数兼容回退" ${settings.AI_PARAMETER_FALLBACK_ENABLED === true ? 'checked' : ''}>
+                            <span class="slider round"></span>
+                        </label>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500;">参数兼容回退（默认关闭）</div>
+                            <p class="form-hint" style="margin: 2px 0;">仅商品分析收到明确的不支持参数错误时，在原重试次数内省略 temperature 或 response_format；不移除 tokens 上限、不改变评分规则。保存后对新启动任务生效，不适用于连接测试或标准生成。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label class="switch">
+                            <input type="checkbox" id="ai-reasoning-fallback-enabled" name="AI_REASONING_FALLBACK_ENABLED" aria-label="兼容网关内容回退" ${settings.AI_REASONING_FALLBACK_ENABLED === true ? 'checked' : ''}>
+                            <span class="slider round"></span>
+                        </label>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500;">兼容网关内容回退（默认关闭）</div>
+                            <p class="form-hint" style="margin: 2px 0;">仅商品分析的最终 content 为空时，尝试读取兼容网关 reasoning_content 中完整且字段一致的 JSON。不会将普通推理文字当作答案；不改变评分或重试次数。保存后对新启动任务生效。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <label class="switch">
                             <input type="checkbox" id="enable-thinking" name="ENABLE_THINKING" ${settings.ENABLE_THINKING ? 'checked' : ''}>
                             <span class="slider round"></span>
                         </label>

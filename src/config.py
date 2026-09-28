@@ -5,6 +5,7 @@ import tempfile
 from dotenv import load_dotenv, dotenv_values
 from openai import AsyncOpenAI
 import httpx
+from src.httpx_compat import create_sdk_http_client
 from src.logging_config import get_logger
 from src.portable.context import (
     PORTABLE_DATABASE_URL_ENVIRONMENT_VARIABLE,
@@ -442,6 +443,22 @@ def ENABLE_THINKING():
 def ENABLE_RESPONSE_FORMAT():
     return get_bool_env_value("ENABLE_RESPONSE_FORMAT", True)
 
+def AI_PARAMETER_FALLBACK_ENABLED():
+    """私有 worker 覆盖优先；缺省关闭且不接受任意非空值。"""
+    value = _get_runtime_override_value("AI_PARAMETER_FALLBACK_ENABLED")
+    if value is None:
+        value = get_env_value("AI_PARAMETER_FALLBACK_ENABLED", "false")
+    return str(value).strip().lower() == "true"
+
+
+def AI_REASONING_FALLBACK_ENABLED():
+    """兼容网关推理字段回退仅由明确的当前用户配置启用。"""
+    value = _get_runtime_override_value("AI_REASONING_FALLBACK_ENABLED")
+    if value is None:
+        value = get_env_value("AI_REASONING_FALLBACK_ENABLED", "false")
+    return str(value).strip().lower() == "true"
+
+
 def AI_VISION_ENABLED():
     return get_bool_env_value("AI_VISION_ENABLED", False)
 
@@ -527,6 +544,9 @@ def initialize_ai_client():
                 "检测到代理地址但 AI 代理开关未开启，AI 请求将直连",
                 extra={"event": "ai_proxy_configured_but_disabled"}
             )
+
+        if "http_client" not in client_params:
+            client_params["http_client"] = create_sdk_http_client()
 
         # 创建客户端
         client = AsyncOpenAI(**client_params)
@@ -633,6 +653,8 @@ def save_env_settings(settings: dict, setting_keys: list):
         "AI_DEBUG_MODE",
         "ENABLE_THINKING",
         "ENABLE_RESPONSE_FORMAT",
+        "AI_PARAMETER_FALLBACK_ENABLED",
+        "AI_REASONING_FALLBACK_ENABLED",
         "AI_VISION_ENABLED",
         "DB_DEDUP_ENABLED",
         "JSONL_FALLBACK_ON_DB_ERROR",
