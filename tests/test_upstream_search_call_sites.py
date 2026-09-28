@@ -1,6 +1,6 @@
 """隔离执行 scraper 的实际搜索动作块，不启动浏览器或导入真实业务配置。
 
-此测试验证 8 处接线和点击/等待预算，不冒充完整 scraper 或字段级载荷验收。
+此测试验证 8 处接线、关键词/页码/筛选绑定和点击/等待预算，不冒充完整 scraper。
 """
 
 import ast
@@ -43,8 +43,18 @@ class ScraperSearchActionTests(unittest.IsolatedAsyncioTestCase):
         ]
         for node, (timeout, sleeps, method, args, kwargs) in zip(nodes, expectations):
             with self.subTest(line=node.lineno):
+                call = node.items[0].context_expr
+                bound_fields = {item.arg for item in call.keywords}
+                self.assertTrue({"expected_keyword", "expected_page_number"} <= bound_fields)
+                if method != "goto":
+                    self.assertIn("filters_changed_from", bound_fields)
                 page = EventPage()
-                old, submitted, parallel = request(), request(), request()
+                baseline = request(data={"keyword": "fixture", "pageNumber": 1, "propValueStr": {}})
+                old = request(data={"keyword": "fixture", "pageNumber": 1, "propValueStr": {}})
+                submitted = request(data={"keyword": "fixture", "pageNumber": 1,
+                                          "propValueStr": {"searchFilter": "active"}})
+                parallel = request(data={"keyword": "fixture", "pageNumber": 1,
+                                         "propValueStr": {"searchFilter": "other"}})
                 expected = SimpleNamespace(request=submitted)
                 async def action(*_args, **_kwargs):
                     page.emit("response", SimpleNamespace(request=old))
@@ -65,7 +75,8 @@ class ScraperSearchActionTests(unittest.IsolatedAsyncioTestCase):
                     "random_sleep": sleep, "search_url": "https://fixture.invalid/search",
                     "new_publish_option": "一天内", "free_shipping_trigger": trigger,
                     "trigger": trigger, "search_btn": trigger, "chosen": {"node": trigger},
-                    "timeout_ms": 12000,
+                    "timeout_ms": 12000, "keyword": "fixture",
+                    "_last_search_request": lambda: baseline,
                 }
                 wrapper = ast.parse("async def run():\n    pass\n").body[0]
                 wrapper.body = [copy.deepcopy(node), ast.Return(value=ast.Await(value=ast.Attribute(

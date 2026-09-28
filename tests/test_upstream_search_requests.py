@@ -1,14 +1,16 @@
 """搜索请求/翻页仿真；不导入真实配置或启动浏览器。"""
 
 import asyncio
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlencode
 
 from src.search_requests import (
     NEXT_PAGE_SELECTOR, advance_search_page, capture_new_request_response,
     is_search_request, is_search_response,
-    expect_new_search_response,
+    expect_new_search_response, search_request_data,
 )
 
 
@@ -16,8 +18,9 @@ API = "h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search"
 URL = "https://" + API + "/1.0/?data=fake"
 
 
-def request(url=URL, method="POST", response=None):
-    return SimpleNamespace(url=url, method=method, response=AsyncMock(return_value=response))
+def request(url=URL, method="POST", response=None, data=None):
+    body = None if data is None else urlencode({"data": json.dumps(data, ensure_ascii=False)})
+    return SimpleNamespace(url=url, method=method, response=AsyncMock(return_value=response), post_data=body)
 
 
 class _Expectation:
@@ -115,6 +118,25 @@ class EventPage:
 
 
 class SearchActionContextTests(unittest.IsolatedAsyncioTestCase):
+    async def test_intent_skips_interleaved_old_page_and_unchanged_filter(self):
+        page = EventPage()
+        baseline = request(data={"keyword": "无人机", "pageNumber": 1, "propValueStr": {}})
+        wrong_keyword = request(data={"keyword": "xbox", "pageNumber": 1,
+                                      "propValueStr": {"searchFilter": "filtered"}})
+        old_page = request(data={"keyword": "无人机", "pageNumber": 2, "propValueStr": {}})
+        old_filter = request(data={"keyword": "无人机", "pageNumber": 1, "propValueStr": {}})
+        changed = request(data={"keyword": "无人机", "pageNumber": 1,
+                                "propValueStr": {"searchFilter": "filtered"}})
+        expected = SimpleNamespace(request=changed)
+        async with expect_new_search_response(
+            page, API, timeout_ms=100, expected_keyword="无人机", expected_page_number=1,
+            filters_changed_from=baseline,
+        ) as info:
+            for req in (wrong_keyword, old_page, old_filter, changed):
+                page.emit("request", req)
+                page.emit("response", expected if req is changed else SimpleNamespace(request=req))
+        self.assertIs(await info.value, expected)
+
     async def test_first_new_request_identity_wins_out_of_order_responses(self):
         page = EventPage()
         old, first, second = request(), request(), request()
@@ -244,6 +266,13 @@ class SearchActionContextTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SearchMatchingTests(unittest.TestCase):
+    def test_parses_observed_form_data_and_rejects_invalid_payloads(self):
+        data = {"keyword": "大疆无人机", "pageNumber": 2, "propValueStr": {"searchFilter": "x"}}
+        self.assertEqual(search_request_data(request(data=data)), data)
+        self.assertIsNone(search_request_data(request()))
+        self.assertIsNone(search_request_data(SimpleNamespace(post_data="data=not-json")))
+        self.assertIsNone(search_request_data(SimpleNamespace(post_data="x=y")))
+
     def test_matches_version_and_post(self):
         for url in (URL, "https://" + API, "https://" + API + "/1.0/", "https://" + API + "/2.0/"):
             self.assertTrue(is_search_request(request(url), API))
@@ -266,6 +295,31 @@ class SearchMatchingTests(unittest.TestCase):
 
 
 class SearchBindingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pagination_requires_expected_page_and_same_filter(self):
+        page = FakePage()
+        baseline = request(data={"keyword": "大疆无人机", "pageNumber": 1,
+                                 "propValueStr": {"searchFilter": "个人闲置"}})
+        desired = object()
+        wrong_page = request(response=object(), data={"keyword": "大疆无人机", "pageNumber": 1,
+                                                    "propValueStr": {"searchFilter": "个人闲置"}})
+        wrong_filter = request(response=object(), data={"keyword": "大疆无人机", "pageNumber": 2,
+                                                      "propValueStr": {}})
+        right = request(response=desired, data={"keyword": "大疆无人机", "pageNumber": 2,
+                                                "propValueStr": {"searchFilter": "个人闲置"}})
+
+        async def click(**_kwargs):
+            for req in (wrong_page, wrong_filter, right):
+                page.emit(req)
+
+        page.button.click.side_effect = click
+        result = await advance_search_page(
+            page, API, AsyncMock(), expected_keyword="大疆无人机", expected_page_number=2,
+            previous_request=baseline,
+        )
+        self.assertIs(result, desired)
+        wrong_page.response.assert_not_awaited()
+        wrong_filter.response.assert_not_awaited()
+
     async def test_binds_first_matching_new_request_not_old_response(self):
         page = FakePage()
         expected = object()

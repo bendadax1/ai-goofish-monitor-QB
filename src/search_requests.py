@@ -2,8 +2,9 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+import json
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 NEXT_PAGE_SELECTOR = (
@@ -11,6 +12,12 @@ NEXT_PAGE_SELECTOR = (
     ":has([class*='search-pagination-arrow-right'])"
     ":not([disabled]):not([aria-disabled='true']):not([class*='disabled'])"
     ":not(:has([class*='disabled']))"
+)
+
+_FILTER_FIELDS = (
+    "sortField", "sortValue", "propValueStr", "extraFilterValue",
+    "customDistance", "customGps", "priceStart", "priceEnd",
+    "minPrice", "maxPrice",
 )
 
 
@@ -61,12 +68,58 @@ def is_search_response(response, url_pattern: str) -> bool:
     return is_search_request(getattr(response, "request", None), url_pattern)
 
 
+def search_request_data(request):
+    """解析实测表单里的 data JSON；失败时返回 None，不记录原始载荷。"""
+    try:
+        body = getattr(request, "post_data", None)
+        if not isinstance(body, str) or not body or len(body) > 1_000_000:
+            return None
+        form = parse_qs(body, keep_blank_values=True, max_num_fields=100)
+        values = form.get("data")
+        if not values or len(values) != 1:
+            return None
+        data = json.loads(values[0])
+        return data if isinstance(data, dict) else None
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _filter_semantics(data):
+    return {field: data.get(field) for field in _FILTER_FIELDS if field in data}
+
+
+def _matches_search_intent(request, expected_keyword=None, expected_page_number=None,
+                           filters_changed_from=None, filters_same_as=None):
+    if all(value is None for value in (
+        expected_keyword, expected_page_number, filters_changed_from, filters_same_as,
+    )):
+        return True
+    data = search_request_data(request)
+    if data is None:
+        return False
+    if expected_keyword is not None and data.get("keyword") != expected_keyword:
+        return False
+    if expected_page_number is not None and str(data.get("pageNumber")) != str(expected_page_number):
+        return False
+    if filters_changed_from is not None:
+        previous = search_request_data(filters_changed_from)
+        if previous is None or _filter_semantics(data) == _filter_semantics(previous):
+            return False
+    if filters_same_as is not None:
+        previous = search_request_data(filters_same_as)
+        if previous is None or _filter_semantics(data) != _filter_semantics(previous):
+            return False
+    return True
+
+
 @asynccontextmanager
-async def expect_new_search_response(page, url_pattern: str, timeout_ms: int = 20000):
+async def expect_new_search_response(page, url_pattern: str, timeout_ms: int = 20000,
+                                     expected_keyword=None, expected_page_number=None,
+                                     filters_changed_from=None):
     """保持原 expect_response 的时限，排除动作前已在途的搜索响应。
 
-    只认监听开启后第一个匹配的新 Request 的对象身份，后续并行请求即使
-    更快返回也不抢占。此处不推断 POST 页码/筛选字段，不重试或修改请求。
+    只认监听开启后第一个符合关键词、页码、筛选变化的新 Request 的对象身份，
+    后续并行请求即使更快返回也不抢占。不重试或修改请求。
     导航/点击及睡眠仍由调用体负责；退出时仅移除本助手自己的监听。
     """
     if timeout_ms <= 0:
@@ -75,7 +128,9 @@ async def expect_new_search_response(page, url_pattern: str, timeout_ms: int = 2
 
     def on_request(request):
         nonlocal submitted_request
-        if submitted_request is None and is_search_request(request, url_pattern):
+        if submitted_request is None and is_search_request(request, url_pattern) and _matches_search_intent(
+            request, expected_keyword, expected_page_number, filters_changed_from,
+        ):
             submitted_request = request
 
     def matches_response(response):
@@ -89,14 +144,18 @@ async def expect_new_search_response(page, url_pattern: str, timeout_ms: int = 2
         page.remove_listener("request", on_request)
 
 
-async def capture_new_request_response(page, url_pattern: str, action, timeout_ms: int = 12000):
+async def capture_new_request_response(page, url_pattern: str, action, timeout_ms: int = 12000,
+                                       expected_keyword=None, expected_page_number=None,
+                                       filters_changed_from=None, filters_same_as=None):
     """只取动作之后新请求的响应，整个动作/请求/响应等待共享同一上限。"""
     if timeout_ms <= 0:
         raise ValueError("请求等待上限必须大于零")
 
     async def capture():
         async with page.expect_request(
-            lambda request: is_search_request(request, url_pattern), timeout=timeout_ms,
+            lambda request: is_search_request(request, url_pattern) and _matches_search_intent(
+                request, expected_keyword, expected_page_number, filters_changed_from, filters_same_as,
+            ), timeout=timeout_ms,
         ) as request_info:
             await action()
         submitted_request = await request_info.value
@@ -105,7 +164,8 @@ async def capture_new_request_response(page, url_pattern: str, action, timeout_m
     return await asyncio.wait_for(capture(), timeout=timeout_ms / 1000)
 
 
-async def advance_search_page(page, url_pattern: str, wait_after_click, timeout_ms: int = 20000):
+async def advance_search_page(page, url_pattern: str, wait_after_click, timeout_ms: int = 20000,
+                              expected_keyword=None, expected_page_number=None, previous_request=None):
     """返回新请求的响应；无可用按钮返回 None，超时/取消交给调用方处理。
 
     每次至多一次点击，不重试；保留业务原有 5–8 秒点击后等待。
@@ -125,6 +185,10 @@ async def advance_search_page(page, url_pattern: str, wait_after_click, timeout_
             await button.click(timeout=timeout_ms)
             await wait_after_click(5, 8)
 
-        return await capture_new_request_response(page, url_pattern, click_and_wait, timeout_ms)
+        return await capture_new_request_response(
+            page, url_pattern, click_and_wait, timeout_ms,
+            expected_keyword=expected_keyword, expected_page_number=expected_page_number,
+            filters_same_as=previous_request,
+        )
 
     return await asyncio.wait_for(advance(), timeout=timeout_ms / 1000)

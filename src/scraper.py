@@ -1205,7 +1205,10 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
             initial_response = None
             for attempt in (1, 2):
                 try:
-                    async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=30000) as response_info:
+                    async with _expect_new_search_response(
+                        page, API_URL_PATTERN, timeout_ms=30000,
+                        expected_keyword=keyword, expected_page_number=1,
+                    ) as response_info:
                         await page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
                     initial_response = await response_info.value
                     break
@@ -1283,12 +1286,19 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 print("LOG: 未检测到广告弹窗。")
 
             final_response = None
+            def _last_search_request():
+                return getattr(final_response or initial_response, "request", None)
+
             log_time("步骤 2 - 应用筛选条件...", task_name=task_name)
             if new_publish_option:
                 try:
                     await page.click('text=新发布')
                     await random_sleep(1, 2)
-                    async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
+                    async with _expect_new_search_response(
+                        page, API_URL_PATTERN, timeout_ms=20000,
+                        expected_keyword=keyword, expected_page_number=1,
+                        filters_changed_from=_last_search_request(),
+                    ) as response_info:
                         await page.click(f"text={new_publish_option}")
                         await random_sleep(2, 4)
                     final_response = await response_info.value
@@ -1299,14 +1309,22 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
             else:
                 await page.click('text=新发布')
                 await random_sleep(2, 4) # 原来是 (1.5, 2.5)
-                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
+                async with _expect_new_search_response(
+                    page, API_URL_PATTERN, timeout_ms=20000,
+                    expected_keyword=keyword, expected_page_number=1,
+                    filters_changed_from=_last_search_request(),
+                ) as response_info:
                     await page.click('text=最新')
                     # --- 修改: 增加排序后的等待时间 ---
                     await random_sleep(4, 7) # 原来是 (3, 5)
                 final_response = await response_info.value
 
             if personal_only:
-                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
+                async with _expect_new_search_response(
+                    page, API_URL_PATTERN, timeout_ms=20000,
+                    expected_keyword=keyword, expected_page_number=1,
+                    filters_changed_from=_last_search_request(),
+                ) as response_info:
                     await page.click('text=个人闲置')
                     # --- 修改: 将固定等待改为随机等待，并加长 ---
                     await random_sleep(4, 6) # 原来是 asyncio.sleep(5)
@@ -1316,7 +1334,11 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 try:
                     free_shipping_trigger = page.get_by_text("包邮", exact=True)
                     if await free_shipping_trigger.count():
-                        async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
+                        async with _expect_new_search_response(
+                            page, API_URL_PATTERN, timeout_ms=20000,
+                            expected_keyword=keyword, expected_page_number=1,
+                            filters_changed_from=_last_search_request(),
+                        ) as response_info:
                             await free_shipping_trigger.first.click()
                             await random_sleep(2, 4)
                         final_response = await response_info.value
@@ -1334,7 +1356,11 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 try:
                     trigger = page.get_by_text(label, exact=True)
                     if await trigger.count():
-                        async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
+                        async with _expect_new_search_response(
+                            page, API_URL_PATTERN, timeout_ms=20000,
+                            expected_keyword=keyword, expected_page_number=1,
+                            filters_changed_from=_last_search_request(),
+                        ) as response_info:
                             await trigger.first.click()
                             await random_sleep(2, 4)
                         final_response = await response_info.value
@@ -1409,7 +1435,11 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                         search_btn = popover.locator("div.searchBtn--Ic6RKcAb").first
                         if await search_btn.count():
                             try:
-                                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=20000) as response_info:
+                                async with _expect_new_search_response(
+                                    page, API_URL_PATTERN, timeout_ms=20000,
+                                    expected_keyword=keyword, expected_page_number=1,
+                                    filters_changed_from=_last_search_request(),
+                                ) as response_info:
                                     await search_btn.click()
                                     await random_sleep(2, 3)
                                 final_response = await response_info.value
@@ -1756,7 +1786,11 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                     f"价格排序第{attempt}/{price_sort_retry}次 stage=click_sent target={option_label} candidate={chosen['text']}",
                     task_name=task_name,
                 )
-                async with _expect_new_search_response(page, API_URL_PATTERN, timeout_ms=timeout_ms) as response_info:
+                async with _expect_new_search_response(
+                    page, API_URL_PATTERN, timeout_ms=timeout_ms,
+                    expected_keyword=keyword, expected_page_number=1,
+                    filters_changed_from=_last_search_request(),
+                ) as response_info:
                     await chosen["node"].click(timeout=3000)
                     await random_sleep(0.8, 1.2)
                 return await response_info.value, top_candidates
@@ -2190,6 +2224,9 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                             API_URL_PATTERN,
                             _submit_and_wait,
                             timeout_ms=12000,
+                            expected_keyword=keyword,
+                            expected_page_number=1,
+                            filters_changed_from=_last_search_request(),
                         )
                         if final_response and final_response.ok:
                             price_filter_applied = True
@@ -2250,6 +2287,8 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                     try:
                         current_response = await advance_search_page(
                             page, API_URL_PATTERN, random_sleep, timeout_ms=20000,
+                            expected_keyword=keyword, expected_page_number=page_num,
+                            previous_request=getattr(current_response, "request", None),
                         )
                         if current_response is None:
                             log_time("未找到可用的下一页按钮或翻页响应，停止翻页。", task_name=task_name)

@@ -506,7 +506,7 @@ def _schema_program_fixture(test_root):
     if program.exists():
         return program
     sources = (
-        "portable_schema.py", "src/__init__.py", "src/version.py", "src/logging_config.py", "src/log_formatters.py", "src/account_policy.py",
+        "portable_schema.py", "src/__init__.py", "src/version.py", "src/logging_config.py", "src/log_formatters.py", "src/log_retention.py", "src/account_policy.py",
         "src/portable/__init__.py", "src/portable/schema.py", "src/portable/seeds.py", "src/portable/maintenance.py",
         "src/storage/__init__.py", "src/storage/models.py",
     )
