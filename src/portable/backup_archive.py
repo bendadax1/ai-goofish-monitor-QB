@@ -724,18 +724,25 @@ def restore_backup_archive(
     zip_name = None
     staging: Path | None = None
     work_directory: Path | None = None
+    phase = "prepare"
     try:
+        phase = "private-work-directory"
         work_directory = _private_work_directory(destination.parent, ".backup-restore-work-")
+        phase = "decrypted-temp-file"
         zip_descriptor, zip_name = tempfile.mkstemp(prefix="decrypt-", suffix=".zip", dir=work_directory)
         _restrict_private_path(Path(zip_name), directory=False)
+        phase = "decrypt"
         with os.fdopen(zip_descriptor, "w+b") as zip_output:
             zip_descriptor = None
             metadata = _decrypt_to_zip(archive, passphrase, zip_output, max_decrypted_bytes, destination.parent)
+        phase = "extraction-stage"
         staging = Path(tempfile.mkdtemp(prefix="restore-", dir=work_directory))
         _restrict_private_path(staging, directory=True)
+        phase = "extract"
         files = _verify_and_extract(Path(zip_name), staging, max_entries=max_entries, max_ratio=max_compression_ratio, max_expanded_bytes=max_decrypted_bytes)
         if os.name != "nt":
             raise BackupArchiveError("atomic directory restore commit is supported only on Windows")
+        phase = "digest"
         digest, _size = _sha256_file(archive)
         try:
             Path(zip_name).unlink()
@@ -743,13 +750,16 @@ def restore_backup_archive(
             logger.error("Portable backup decrypted ZIP cleanup failed", extra={"event": "portable_backup_decrypt_cleanup_failed"})
             raise BackupArchiveError("decrypted backup cleanup failed before restore publication") from None
         zip_name = None
+        phase = "publish"
         os.rename(staging, destination)
         staging = None
         return BackupArchiveResult(archive, digest, files, metadata)
     except BackupArchiveError:
         raise
-    except Exception:
-        logger.error("Portable backup restoration failed", extra={"event": "portable_backup_restore_failed"})
+    except Exception as error:
+        logger.error("Portable backup restoration failed (phase=%s, class=%s, winerror=%s)",
+                     phase, type(error).__name__, getattr(error, "winerror", None),
+                     extra={"event": "portable_backup_restore_failed"})
         raise BackupArchiveError("backup restoration failed") from None
     finally:
         if zip_descriptor is not None:

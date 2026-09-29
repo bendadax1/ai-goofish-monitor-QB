@@ -19,6 +19,11 @@ if (args.Length > 0 && args[0] == "--restore-child")
     return await RunRestoreChildAsync(args.Skip(1).ToArray());
 }
 
+if (args.Length > 0 && args[0] == "--migration-child")
+{
+    return await RunMigrationChildAsync(args.Skip(1).ToArray());
+}
+
 if (args.Length > 0 && args[0] == "--child")
 {
     return await RunChildAsync(args.Skip(1).ToArray());
@@ -81,6 +86,8 @@ var tests = new (string Name, Func<ProcessTestWorkspace, Task> Run)[]
     ("恢复失败保留目标且不改变活动指针", TestRestoreFailureRetainsTargetAsync),
     ("恢复 runner 私有 stdio 四次 proof 与凭据隔离", TestRestoreRunnerProtocolAsync),
     ("恢复 runner 拒绝无效 proof", TestRestoreRunnerRejectsBadProofAsync),
+    ("升级 runner 输出有界且拒绝截断帧", TestMigrationRunnerBoundedFramesAsync),
+    ("升级 runner 三次维护 proof 与失败拒绝", TestMigrationRunnerProtocolAsync),
     ("旧实例未确认停止时拒绝恢复切换", TestRestoreActivationRequiresSourceStoppedAsync),
     ("Launcher 用户配对和业务请求上下文", PortableLauncherUserClientCases.TestPairingAndUserRequestsAsync),
     ("Launcher 会话过期与 Host generation 清缓存", PortableLauncherUserClientCases.TestSessionExpiryAndContextInvalidationAsync),
@@ -518,6 +525,91 @@ static async Task TestRestoreRunnerProtocolAsync(ProcessTestWorkspace workspace)
     }
 }
 
+static async Task TestMigrationRunnerBoundedFramesAsync(ProcessTestWorkspace workspace)
+{
+    var root = workspace.CreateCaseRoot("migration-runner-bounded");
+    Directory.CreateDirectory(root);
+    foreach (var (wire, expected) in new[]
+    {
+        ("{\"type\":\"verify\"}\n", "{\"type\":\"verify\"}"),
+        ("", (string?)null),
+        ("partial", "partial"),
+    })
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(wire));
+        using var reader = new StreamReader(stream, new UTF8Encoding(false));
+        Assert(await PortableSchemaMigrationRunner.ReadBoundedLineAsync(reader, CancellationToken.None) == expected,
+            "升级协议单帧读取不应丢失内容");
+    }
+    using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(new string('x', 4097) + "\n")))
+    using (var reader = new StreamReader(stream, new UTF8Encoding(false)))
+    {
+        await AssertThrowsAsync<InvalidOperationException>(() =>
+            PortableSchemaMigrationRunner.ReadBoundedLineAsync(reader, CancellationToken.None));
+    }
+}
+
+static async Task TestMigrationRunnerProtocolAsync(ProcessTestWorkspace workspace)
+{
+    var root = workspace.CreateCaseRoot("migration-runner-protocol");
+    var data = Path.Combine(root, "data");
+    var pgdata = Path.Combine(data, "postgres", "cluster");
+    Directory.CreateDirectory(pgdata);
+    Directory.CreateDirectory(Path.Combine(data, "cache", "temp"));
+    var backupPath = Path.Combine(root, "fixture.gfbk");
+    File.WriteAllBytes(backupPath, [1, 2, 3, 4]);
+    using var lease = InstanceDataRootLease.Acquire(data);
+    var secrets = new WindowsInstanceSecretsStore().CreateNew(lease, pgdata);
+    var bundle = new PortableBundleDescriptor(root, "fixture-release", "fixture-app", 1, 2,
+        root, workspace.ChildExecutable, root, root, workspace.ChildExecutable);
+    var backup = new PortableBusinessBackupResult(backupPath, new string('a', 64), 0);
+
+    async Task<(int Checks, (int Version, string Status)? Result, Exception? Failure)> Run(string mode)
+    {
+        var checks = 0;
+        try
+        {
+            var result = await PortableSchemaMigrationRunner.RunAsync(
+                bundle, lease, secrets, 55432, backup,
+                _ => { checks++; return Task.CompletedTask; }, CancellationToken.None,
+                startInfo =>
+                {
+                    Assert(!startInfo.ArgumentList.Any(value => value.Contains(secrets.PostgresBootstrapAdminPassword,
+                        StringComparison.Ordinal)), "管理员密码不得出现在升级 argv");
+                    Assert(!startInfo.Environment.Values.Any(value => value is not null &&
+                        value.Contains(secrets.PostgresBootstrapAdminPassword, StringComparison.Ordinal)),
+                        "管理员密码不得出现在升级环境变量");
+                    var dotnet = GetCurrentDotnetHost();
+                    startInfo.FileName = dotnet.HostPath;
+                    startInfo.ArgumentList.Clear();
+                    startInfo.ArgumentList.Add(typeof(Program).Assembly.Location);
+                    startInfo.ArgumentList.Add("--migration-child");
+                    startInfo.ArgumentList.Add(mode);
+                    startInfo.Environment["DOTNET_ROOT"] = dotnet.Root;
+                    return new Process { StartInfo = startInfo };
+                });
+            return (checks, result, null);
+        }
+        catch (Exception exception)
+        {
+            return (checks, null, exception);
+        }
+    }
+
+    var success = await Run("valid");
+    Assert(success.Failure is null && success.Checks == 3 && success.Result == (2, "applied"),
+        "升级必须在三次维护 proof 后才接受完成响应");
+    var refused = await Run("bad-counter");
+    Assert(refused.Failure is InvalidOperationException && refused.Checks == 0,
+        "乱序维护 proof 必须在回调前拒绝");
+    var oversized = await Run("oversized");
+    Assert(oversized.Failure is InvalidOperationException && oversized.Checks == 0,
+        "超长升级响应必须在读取时拒绝");
+    var failed = await Run("failed");
+    Assert(failed.Failure is InvalidOperationException && failed.Checks == 3,
+        "非零退出不能被当作成功升级");
+}
+
 static async Task TestRestoreRunnerFileCountAsync(ProcessTestWorkspace workspace, int fileCount)
 {
     var root = workspace.CreateCaseRoot($"restore-runner-{fileCount}");
@@ -637,6 +729,56 @@ static async Task TestRestoreActivationRequiresSourceStoppedAsync(ProcessTestWor
     executor.SourceRunning = false;
     var activated = await session.ConfirmActivationAsync(PortableRestoreSession.RequiredConfirmationText);
     Assert(activated.State == PortableRestoreState.Activated, "旧实例确认停止后可切换到已核对目标");
+}
+
+static async Task<int> RunMigrationChildAsync(string[] childArguments)
+{
+    if (childArguments.Length != 1) return 64;
+    try
+    {
+        var requestLine = await Console.In.ReadLineAsync();
+        if (requestLine is null) return 65;
+        using var request = JsonDocument.Parse(requestLine);
+        var root = request.RootElement;
+        if (root.GetProperty("type").GetString() != "migrate" ||
+            !root.TryGetProperty("admin_dsn", out _) ||
+            !root.TryGetProperty("backup_sha256", out _)) return 66;
+        var session = root.GetProperty("session").GetString();
+        if (session is null) return 67;
+        var mode = childArguments[0];
+        if (mode == "oversized")
+        {
+            Console.Out.WriteLine(new string('x', 4097));
+            return 0;
+        }
+        for (var counter = 1; counter <= 3; counter++)
+        {
+            Console.Out.WriteLine(JsonSerializer.Serialize(new
+            {
+                type = "verify", session,
+                counter = mode == "bad-counter" && counter == 1 ? 2 : counter,
+            }));
+            Console.Out.Flush();
+            var acknowledgementLine = await Console.In.ReadLineAsync();
+            if (acknowledgementLine is null) return 68;
+            using var acknowledgement = JsonDocument.Parse(acknowledgementLine);
+            var answer = acknowledgement.RootElement;
+            if (answer.GetProperty("type").GetString() != "verified" ||
+                answer.GetProperty("session").GetString() != session ||
+                answer.GetProperty("counter").GetInt32() != counter) return 69;
+        }
+        if (mode == "failed") return 70;
+        Console.Out.WriteLine(JsonSerializer.Serialize(new
+        {
+            type = "complete", session, schema_version = 2, status = "applied", checks = 3,
+        }));
+        Console.Out.Flush();
+        return 0;
+    }
+    catch
+    {
+        return 71;
+    }
 }
 
 static async Task<int> RunRestoreChildAsync(string[] childArguments)

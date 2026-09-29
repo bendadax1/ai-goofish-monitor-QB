@@ -9,6 +9,7 @@ internal sealed record PortableBusinessRestoreResult(
     Guid TargetInstanceId,
     string SourceInstanceId,
     string ArchiveSha256,
+    int SchemaVersion,
     IReadOnlyDictionary<string, long> TableCounts,
     int RestoredFileCount,
     int RevokedSessionCount,
@@ -258,7 +259,14 @@ internal static class PortableBusinessRestoreRunner
         int proofCount,
         string session)
     {
-        if (proofCount != 4 || frame.EnumerateObject().Count() != 10 ||
+        var fieldCount = frame.EnumerateObject().Count();
+        var schemaVersion = 1;
+        if (fieldCount == 11 &&
+            (!frame.TryGetProperty("schema_version", out var schemaElement) ||
+             !schemaElement.TryGetInt32(out schemaVersion) || schemaVersion is not (1 or 2)))
+            throw new PortableRestoreException("RESTORE_RESULT_INVALID", "恢复摘要 schema 版本无效。");
+        // Legacy v1 helpers emitted ten fields; they could not restore v2.
+        if (proofCount != 4 || fieldCount is not (10 or 11) ||
             !TryGetString(frame, "instance_id", out var instanceText) ||
             !Guid.TryParseExact(instanceText, "D", out var instanceId) || instanceId != target.InstanceId ||
             !TryGetString(frame, "source_instance_id", out var sourceInstance) ||
@@ -304,6 +312,7 @@ internal static class PortableBusinessRestoreRunner
             instanceId,
             sourceInstance,
             archiveSha256,
+            schemaVersion,
             counts,
             fileCount,
             revoked,

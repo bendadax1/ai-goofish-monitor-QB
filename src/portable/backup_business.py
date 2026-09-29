@@ -108,18 +108,19 @@ def create_business_backup(*, data_root: Path, postgres_root: Path, pgdata: Path
             raise BackupArchiveError("business file set changed during backup")
         verify_quiesced()
         (work / "recovery-keys.json").write_bytes(key_payload)
-        manifest = {"format_version": 1, "kind": "business-backup", "schema_version": 1,
+        manifest = {"format_version": 1, "kind": "business-backup", "schema_version": database.schema_version,
             "instance_id": instance_id, "app_version": app_version,
             "database": {"sha256": database.sha256, "size": database.size, "table_counts": dict(database.table_counts)},
             "files": assets, "excluded": list(inventory.excluded),
             "restore": {"postgres_major": 17, "database": "aigoofish", "new_instance_required": True,
                 "fresh_database_passwords_required": True, "dpapi_reprotection_required": True,
                 "app_role": "aigoofish_app", "probe_role": "aigoofish_probe",
-                "grant_policy": "portable-schema-v1"}}
+                "grant_policy": f"portable-schema-v{database.schema_version}"}}
         (work / "backup.json").write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         encrypted_pending = destination.parent / (".business-encrypted-" + uuid.uuid4().hex + ".tmp")
         result = create_backup_archive(work, selected, encrypted_pending, passphrase,
-            {"instance_id": instance_id, "app_version": app_version, "schema_version": 1})
+            {"instance_id": instance_id, "app_version": app_version,
+             "schema_version": database.schema_version})
         _clear_private_stage(work, destination.parent)
         work = None
         _commit_new_file(encrypted_pending, destination)

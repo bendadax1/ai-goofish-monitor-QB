@@ -45,6 +45,16 @@ class BackupInventoryTests(unittest.TestCase):
         self.assertEqual(result.total_bytes, 4 * len(b"fixture"))
         self.assertIn("protected-business-key-export", result.required_separate_payloads)
 
+    def test_notification_dedupe_ledger_is_in_encrypted_business_backup_scope(self):
+        self.put("state/notification-tests/requests-v1.json", b'{"format_version":1,"entries":{}}\n')
+        self.put("state/notification-tests/requests-v1.lock", b"")
+        result = inventory_business_files(self.root)
+        self.assertTrue(result.file_scope_ready)
+        self.assertEqual([item.path for item in result.files], [
+            "state/notification-tests/requests-v1.json",
+            "state/notification-tests/requests-v1.lock",
+        ])
+
     def test_unknown_config_and_root_block_instead_of_silent_omission(self):
         self.put("unknown/new.txt")
         self.put("config/custom.env")

@@ -11,9 +11,9 @@ public sealed class BackupPassphraseDialog : Window
     private readonly TextBox _confirmation;
     private readonly TextBlock _validation;
 
-    public BackupPassphraseDialog()
+    public BackupPassphraseDialog(bool forSchemaUpgrade = false)
     {
-        Title = "加密业务备份";
+        Title = forSchemaUpgrade ? "备份并升级数据结构" : "加密业务备份";
         Width = 520;
         SizeToContent = SizeToContent.Height;
         MinWidth = 480;
@@ -59,7 +59,9 @@ public sealed class BackupPassphraseDialog : Window
             {
                 new TextBlock
                 {
-                    Text = "备份将安全停止 Web 与 PostgreSQL，过程可能需要较长时间。备份仅写入刚才选择的文件夹。",
+                    Text = forSchemaUpgrade
+                        ? "将先停写并创建加密备份，再把当前数据库从 v1 升级到 v2。升级后旧程序不能直接读取新数据库；失败时保持停机并保留备份。"
+                        : "备份将安全停止 Web 与 PostgreSQL，过程可能需要较长时间。备份仅写入刚才选择的文件夹。",
                     TextWrapping = TextWrapping.Wrap,
                     Foreground = new SolidColorBrush(Color.Parse("#24334A")),
                 },

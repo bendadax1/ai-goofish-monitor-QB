@@ -1,6 +1,6 @@
 # 便携版维护后端契约
 
-> 状态：P0 有界实现，协议版本 1（2026-09-12）
+> 状态：协议版本 1；本文件的 P0 验证记录为历史证据，当前 B2 扩展以实际源码及 `UPSTREAM_UPGRADE_PLAN.md` 验收记录为准（2026-09-29）。
 
 `portable_server.py` 是 Launcher 专用的独立维护入口。它不导入或启动
 `src.web.main`、业务 router、认证、调度器或存储适配器；不读取 `.env`，
@@ -21,7 +21,7 @@
   --port <1..65535>
 ```
 
-- Python bootstrap 仅允许固定白名单：`maintenance`、`schema`、`provision`、`web`、`collector`、`login`；它拒绝任意模块、脚本或相对应用根。worker 调用层只允许 `collector` / `login`，不继承 Launcher 控制及初始化凭据。`python313._pth` 固定为 `python313.zip`、`.`、`site-packages` 和 `import site`，不加载用户或系统 site-packages。
+- Python bootstrap 仅允许固定白名单：`maintenance`、`schema`、`provision`、`migrate`、`web`、`collector`、`login`；它拒绝任意模块、脚本或相对应用根。`migrate` 仅由 Launcher 在维护停写、备份和实例归属证明下显式调用，不是 worker 或普通 Web 启动目标。worker 调用层只允许 `collector` / `login`，不继承 Launcher 控制及初始化凭据。`python313._pth` 固定为 `python313.zip`、`.`、`site-packages` 和 `import site`，不加载用户或系统 site-packages。
 - 入口只支持 `maintenance`；传入 `normal` 会明确失败，不会默默启动业务服务。
 - 服务固定监听 `127.0.0.1`。路径参数必须是绝对路径，解析不依赖当前工作目录，入口不创建这些目录。
 - Launcher 秘密仅由 `GOOFISH_LAUNCHER_TOKEN` 传入；数据库连接仅由
@@ -48,7 +48,7 @@ Windows 服务，不修改 PATH 或防火墙；普通停止不依赖 Windows 强
 它读取 `GOOFISH_PORTABLE_ADMIN_DATABASE_URL`（仅 postgres 库）、
 `GOOFISH_PORTABLE_APP_DATABASE_PASSWORD` 和 `GOOFISH_PORTABLE_PROBE_DATABASE_PASSWORD`，
 密码不进命令行。校验 C# 集群 marker 与服务器 data_directory 后，以独占锁创建固定
-`aigoofish` 库、`aigoofish_app` / `aigoofish_probe` 角色及 schema 1。已有业务库或角色时拒绝，
+`aigoofish` 库、`aigoofish_app` / `aigoofish_probe` 角色及 schema 2（`--schema-version 2`）；测试保留显式 v1 初始化夹具用于旧备份恢复。已有业务库或角色时拒绝，
 不删库/改密码/自动补建；CREATE DATABASE 非事务，因此中断是需要诊断的初始化恢复状态，
 不是普通重试。普通 Web 启动不执行该入口。
 
@@ -93,7 +93,7 @@ probe。
     "status": "compatible",
     "version": 1,
     "supported_min": 1,
-    "supported_max": 1
+    "supported_max": 2
   },
   "failure_reason": null
 }
@@ -107,7 +107,7 @@ probe。
 | `unavailable` | `unknown` | `database_unavailable` | 连接或基础查询失败 |
 | `available` | `uninitialized` | `schema_uninitialized` | 版本表不存在或表为空 |
 | `available` | `invalid` | `schema_invalid` | 不是恰好一行正整数版本 |
-| `available` | `incompatible` | `schema_incompatible` | 版本不在支持范围 `1..1` |
+| `available` | `incompatible` | `schema_incompatible` | 版本不在支持范围 `1..2` |
 
 schema 契约表为 `public.app_schema_version(version integer)`。Probe 先用
 `to_regclass` 判断表是否存在，然后最多读取两行以验证“恰好一行”；不使用
@@ -121,8 +121,9 @@ schema 契约表为 `public.app_schema_version(version integer)`。Probe 先用
 
 Launcher 必须把预期的 `protocol_version`、`instance_id`、`app_version`、
 数据库就绪和 schema 兼容同时纳入归属校验，不能因 `/health` 或端口可连就
-认定是自己的可用实例。当前只实现版本查询；schema 初始化、迁移、锁、备份和
-恢复是后续独立能力，不得由该 probe 暗中执行。
+认定是自己的可用实例。Probe 仍只查询版本，绝不暗中执行初始化或迁移；
+新装 v2、显式 002 迁移、备份和隔离恢复由独立入口及 Launcher 编排，不能把
+版本查询的成功当作上述流程的验收证明。
 
 ## P0 隔离验证证据（2026-09-12）
 

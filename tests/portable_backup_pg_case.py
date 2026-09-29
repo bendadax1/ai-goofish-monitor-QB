@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import uuid
 
@@ -17,7 +18,8 @@ from src.portable.backup_restore import restore_business_backup
 from tests import portable_pg_smoke as pg
 
 
-def check_backup_roundtrip(state, port, admin, password, instance_id, runtime_root):
+def check_backup_roundtrip(state, port, admin, password, instance_id, runtime_root,
+                           *, schema_version=1, owners=(), export_fixture=None):
     business_data = state.root / "backup-business-fixture"
     (business_data / "assets").mkdir(parents=True)
     master = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
@@ -45,12 +47,14 @@ def check_backup_roundtrip(state, port, admin, password, instance_id, runtime_ro
         finally:
             check.close()
     create_business_backup(data_root=business_data, postgres_root=runtime_root, pgdata=state.data_root,
-        instance_id=instance_id, app_version="fixture-v1", admin_dsn=pg._dsn(port=port, database="aigoofish", user=admin, password=password),
+        instance_id=instance_id, app_version=f"fixture-v{schema_version}", admin_dsn=pg._dsn(port=port, database="aigoofish", user=admin, password=password),
         recovery_keys={"encryption_master_key": master, "secret_key": signing}, destination=archive,
         passphrase=passphrase, verify_quiesced=verify_fixture_quiesced)
     restored = state.root / "restored-fixture"
     restore_backup_archive(archive, restored, passphrase)
     report = json.loads((restored / "backup.json").read_text(encoding="utf-8"))
+    assert report["schema_version"] == schema_version
+    assert report["restore"]["grant_policy"] == f"portable-schema-v{schema_version}"
     assert hashlib.sha256((restored / "database.dump").read_bytes()).hexdigest() == report["database"]["sha256"]
     assert (restored / "files/assets/中文.txt").read_text(encoding="utf-8") == "本地恢复样本"
     recovered_keys = json.loads((restored / "recovery-keys.json").read_text(encoding="utf-8"))["keys"]
@@ -83,14 +87,34 @@ def check_backup_roundtrip(state, port, admin, password, instance_id, runtime_ro
                 if cursor.fetchone()[0] != count:
                     raise pg.SmokeFailure("logical restore row count mismatch")
             cursor.execute("SELECT version FROM public.app_schema_version")
-            assert cursor.fetchall() == [(1,)]
+            assert cursor.fetchall() == [(schema_version,)]
+            for owner in owners:
+                cursor.execute("SELECT count(*) FROM public.result_hidden_items WHERE owner_id=%s", (owner,))
+                assert cursor.fetchone() == (1,)
     finally:
         connection.close()
-    _check_full_isolated_restore(state, archive, passphrase, instance_id, runtime_root)
+    _check_full_isolated_restore(state, archive, passphrase, instance_id, runtime_root,
+                                 expected_version=schema_version, owners=owners)
+    if export_fixture is not None:
+        export_root = Path(export_fixture)
+        approved_parent = pg._REPOSITORY_ROOT / ".tmp" / "tests" / "b2-schema-upgrade"
+        if (schema_version != 1 or not export_root.is_absolute() or
+            export_root.parent.resolve(strict=True) != approved_parent.resolve(strict=True) or
+            export_root.exists()):
+            raise pg.SmokeFailure("v1 acceptance export path is not a new approved fixture")
+        export_root.mkdir()
+        shutil.copyfile(archive, export_root / "v1.gfbk")
+        secret_file = export_root / "passphrase.txt"
+        secret_file.touch(exist_ok=False)
+        pg._restrict_secret_file(secret_file)
+        secret_file.write_text(passphrase, encoding="utf-8")
+        if hashlib.sha256((export_root / "v1.gfbk").read_bytes()).hexdigest() != hashlib.sha256(archive.read_bytes()).hexdigest():
+            raise pg.SmokeFailure("v1 acceptance export digest differs")
     print("PORTABLE_BUSINESS_BACKUP_DB_FILES_KEYS_RESTORE=PASS")
 
 
-def _check_full_isolated_restore(state, archive, passphrase, source_instance_id, runtime_root):
+def _check_full_isolated_restore(state, archive, passphrase, source_instance_id, runtime_root,
+                                 *, expected_version=1, owners=()):
     target_root = state.root / "new-recovery-target"
     pgdata = target_root / "postgres" / "cluster"
     pgdata.parent.mkdir(parents=True)
@@ -150,6 +174,44 @@ def _check_full_isolated_restore(state, archive, passphrase, source_instance_id,
         assert result.instance_id == target_id
         assert result.status == "awaiting_target_user_dpapi_and_switch_confirmation"
         assert (target_root / "assets/中文.txt").read_text(encoding="utf-8") == "本地恢复样本"
+        check = pg._connect(port=target_port, database="aigoofish", user=target_admin,
+                            password=target_password)
+        try:
+            with check.cursor() as cursor:
+                cursor.execute("SELECT version FROM public.app_schema_version")
+                assert cursor.fetchall() == [(expected_version,)]
+                for owner in owners:
+                    cursor.execute("SELECT count(*) FROM public.result_hidden_items WHERE owner_id=%s", (owner,))
+                    assert cursor.fetchone() == (1,)
+        finally:
+            check.close()
+        if expected_version == 1:
+            from src.portable import schema
+            from src.portable.schema_catalog import V2_FINGERPRINT
+            from src.portable.schema_fingerprint import public_schema_fingerprint
+            from src.portable.upstream_migration import migrate_upstream_schema
+
+            def verify_restored_backup():
+                if hashlib.sha256(archive.read_bytes()).hexdigest() != result.archive_sha256:
+                    raise pg.SmokeFailure("pre-migration restored backup proof differs")
+
+            engine = schema._engine_from_environment({
+                schema.ADMIN_DATABASE_ENVIRONMENT_VARIABLE: pg._dsn(
+                    port=target_port, database="aigoofish", user=target_admin,
+                    password=target_password),
+            })
+            try:
+                migrated = migrate_upstream_schema(engine,
+                    schema.DatabaseRoles(target_admin, "aigoofish_app", "aigoofish_probe"),
+                    pgdata=pgdata, instance_id=target_id,
+                    verify_maintenance=verify_fixture_maintenance,
+                    verify_backup=verify_restored_backup)
+                assert (migrated.version, migrated.status) == (2, "applied")
+                with engine.begin() as connection:
+                    connection.execute(schema.text('SET LOCAL search_path = pg_catalog, "public"'))
+                    assert public_schema_fingerprint(connection) == V2_FINGERPRINT
+            finally:
+                engine.dispose()
         payload = json.loads((result.private_handoff / "secrets.json").read_text(encoding="utf-8"))
         assert payload["instance_id"] == target_id
         assert payload["encryption_master_key"] == json.loads(

@@ -73,6 +73,7 @@ _SOURCE_ENTRYPOINTS = (
     "portable_web.py",
     "portable_backup.py",
     "portable_restore.py",
+    "portable_migrate.py",
     "web_server.py",
     "scripts/portable/python-bootstrap.py",
     "License",
@@ -269,7 +270,7 @@ def _source_files(source_root: Path) -> list[PlannedFile]:
                 continue
             if relative not in tracked and not (
                 relative.startswith("src/portable/") and candidate.suffix == ".py"
-                or relative in {"src/runtime_paths.py", "src/log_retention.py", "src/account_policy.py", "src/web/account_models.py", "static/js/account_policy.js", "templates/portable_setup.html", "static/portable/setup.js", "static/portable/setup.css"}
+                or relative in {"src/runtime_paths.py", "src/log_retention.py", "src/account_policy.py", "src/web/account_models.py", "src/storage/upstream_local.py", "static/js/account_policy.js", "templates/portable_setup.html", "static/portable/setup.js", "static/portable/setup.css"}
             ):
                 raise BundleError("untracked program asset requires an explicit build allow-list entry")
             if candidate.name.startswith(".") or candidate.suffix.lower() in {".log", ".bak", ".zip", ".tmp", ".env"}:
@@ -577,7 +578,7 @@ def plan_bundle(release_id: str, source_root: Path = _ROOT, launcher_root: Path 
         "release_status": "preview-integration",
         "release_id": release_id,
         "platform": "windows-x64",
-        "app": {"exact_id": app_id, "relative_dir": "app", "version": app_version, "schema_min": 1, "schema_max": 1},
+        "app": {"exact_id": app_id, "relative_dir": "app", "version": app_version, "schema_min": 1, "schema_max": 2},
         "runtime": {"exact_id": python_id, "relative_dir": "runtime"},
         "browser": {"exact_id": browser_id, "relative_dir": "browsers"},
         "postgres": {"exact_id": postgres_id, "relative_dir": "postgres"},

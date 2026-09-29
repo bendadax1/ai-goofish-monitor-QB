@@ -122,6 +122,7 @@ public sealed class WindowsPortableProvisionStep : ILauncherStartupStep
                 "--",
                 "--pgdata", _pgData,
                 "--instance-id", _lease.InstanceId.ToString("D"),
+                "--schema-version", "2",
             },
             new[]
             {
@@ -156,7 +157,7 @@ public sealed class WindowsPortableProvisionStep : ILauncherStartupStep
                 LauncherDiagnosticCode.DatabaseProvisionInterrupted);
         }
 
-        PythonStateFile.WriteNew(completePath, new ProvisionComplete(1, _lease.InstanceId, 1, DateTimeOffset.UtcNow));
+        PythonStateFile.WriteNew(completePath, new ProvisionComplete(1, _lease.InstanceId, 2, DateTimeOffset.UtcNow));
         try
         {
             File.Delete(progressPath);
@@ -189,7 +190,8 @@ public sealed class WindowsPortableProvisionStep : ILauncherStartupStep
         }
 
         var complete = PythonStateFile.Read<ProvisionComplete>(completePath, StateFileLimit);
-        if (complete.FormatVersion != 1 || complete.InstanceId != _lease.InstanceId || complete.SchemaVersion != 1)
+        if (complete.FormatVersion != 1 || complete.InstanceId != _lease.InstanceId ||
+            complete.SchemaVersion is not (1 or 2))
         {
             throw new PythonLifecycleException("数据库准备完成记录与当前实例不匹配。");
         }
@@ -211,7 +213,7 @@ public sealed class WindowsPortableProvisionStep : ILauncherStartupStep
     {
         ArgumentNullException.ThrowIfNull(lease);
         lease.EnsureHeld();
-        if (schemaVersion != 1)
+        if (schemaVersion is not (1 or 2))
         {
             throw new PythonLifecycleException("恢复目标 schema 版本与 P1 基线不兼容。");
         }
@@ -275,7 +277,7 @@ public sealed class WindowsPortableProvisionStep : ILauncherStartupStep
                 root.TryGetProperty("database", out var database) && database.GetString() == "aigoofish" &&
                 root.TryGetProperty("app_role", out var appRole) && appRole.GetString() == "aigoofish_app" &&
                 root.TryGetProperty("probe_role", out var probeRole) && probeRole.GetString() == "aigoofish_probe" &&
-                root.TryGetProperty("schema_version", out var version) && version.TryGetInt32(out var value) && value == 1;
+                root.TryGetProperty("schema_version", out var version) && version.TryGetInt32(out var value) && value == 2;
         }
         catch (JsonException)
         {

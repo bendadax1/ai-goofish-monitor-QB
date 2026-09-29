@@ -42,7 +42,8 @@ class RestoreEntryTests(unittest.TestCase):
             self.assertEqual(kwargs["admin_dsn"], "secret-admin-dsn")
             return SimpleNamespace(
                 instance_id="new-instance", source_instance_id="old-instance",
-                archive_sha256="b" * 64, table_counts={"sessions": 0},
+                archive_sha256="b" * 64, schema_version=1,
+                table_counts={"sessions": 0},
                 file_count=3, revoked_sessions=2,
                 private_handoff=Path("X:/private/handoff/.restore-handoff-fixture"),
                 status="awaiting_target_user_dpapi_and_switch_confirmation",
@@ -54,6 +55,7 @@ class RestoreEntryTests(unittest.TestCase):
         self.assertEqual([frame["type"] for frame in frames], ["verify"] * 4 + ["complete"])
         self.assertEqual([frame["counter"] for frame in frames[:4]], [1, 2, 3, 4])
         self.assertEqual(frames[-1]["status"], "awaiting_target_user_dpapi_and_switch_confirmation")
+        self.assertEqual(frames[-1]["schema_version"], 1)
         self.assertNotIn("secret-passphrase", json.dumps(frames) + stderr)
         self.assertNotIn("secret-admin-dsn", json.dumps(frames) + stderr)
 

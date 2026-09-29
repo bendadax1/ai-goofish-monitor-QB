@@ -346,7 +346,7 @@ class PortableMaintenanceRouteTests(unittest.TestCase):
                     "status": "compatible",
                     "version": 1,
                     "supported_min": 1,
-                    "supported_max": 1,
+                    "supported_max": 2,
                 },
                 "failure_reason": None,
             },
@@ -459,9 +459,9 @@ class PostgresReadinessProbeTests(unittest.TestCase):
                 self.assertFalse(result.ready)
 
     def test_schema_version_outside_supported_range_is_incompatible(self):
-        result, _, _, _ = self._run_probe(version_rows=((2,),))
+        result, _, _, _ = self._run_probe(version_rows=((3,),))
         self.assertEqual(result.schema_status, "incompatible")
-        self.assertEqual(result.schema_version, 2)
+        self.assertEqual(result.schema_version, 3)
         self.assertEqual(result.failure_reason, "schema_incompatible")
 
     def test_connection_error_is_sanitized_and_does_not_escape(self):

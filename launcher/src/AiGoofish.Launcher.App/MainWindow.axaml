@@ -513,7 +513,8 @@
                 <TextBlock Classes="muted" Text="操作需要停止服务；恢复完成后请手动启动。请妥善保管备份口令，遗失后无法恢复。" TextWrapping="Wrap" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                   <Button x:Name="BusinessBackupButton" Classes="secondary" Content="创建备份" IsEnabled="{Binding CanCreateBusinessBackup}" Click="OnBusinessBackupClick" TabIndex="19" />
-                  <Button x:Name="BusinessRestoreButton" Classes="secondary" Content="恢复备份" IsEnabled="{Binding CanRestoreBusinessBackup}" Click="OnBusinessRestoreClick" TabIndex="20" />
+                  <Button x:Name="SchemaUpgradeButton" Classes="secondary" Content="备份并升级数据" IsEnabled="{Binding CanUpgradeSchema}" Click="OnSchemaUpgradeClick" TabIndex="20" />
+                  <Button x:Name="BusinessRestoreButton" Classes="secondary" Content="恢复备份" IsEnabled="{Binding CanRestoreBusinessBackup}" Click="OnBusinessRestoreClick" TabIndex="21" />
                 </StackPanel>
               </StackPanel>
             </Border>

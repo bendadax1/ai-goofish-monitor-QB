@@ -24,6 +24,7 @@ from src.portable.backup_archive import (
 )
 from src.portable.maintenance import validate_database_target
 from src.portable.provision import _owned_marker
+from src.portable.schema_catalog import expected_tables
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ def _dump_process(executable: Path, snapshot: str, output: Path, environment: di
 def dump_owned_database(*, postgres_root: Path, pgdata: Path, instance_id: str,
                         admin_dsn: str, destination: Path, max_bytes: int = 8 * 1024**3,
                         timeout: float = 180) -> DatabaseDump:
-    """Export one schema-v1 database after checking actual PGDATA and ownership.
+    """Export one exact schema-v1/v2 database after checking PGDATA and ownership.
 
     Passwords are passed only in the helper's explicit environment, never argv.
     The output is a private logical dump, intended for immediate encryption.
@@ -124,8 +125,10 @@ def dump_owned_database(*, postgres_root: Path, pgdata: Path, instance_id: str,
             if cursor.fetchone()[0] != "aigoofish-instance:" + identifier:
                 raise BackupArchiveError("backup database ownership does not match the instance")
             cursor.execute("SELECT version FROM public.app_schema_version LIMIT 2")
-            if cursor.fetchall() != [(1,)]:
+            versions = cursor.fetchall()
+            if len(versions) != 1 or versions[0][0] not in (1, 2):
                 raise BackupArchiveError("backup schema is not supported")
+            schema_version = versions[0][0]
             cursor.execute("SELECT pg_database_size(current_database())")
             estimated = int(cursor.fetchone()[0])
             _require_disk_space(destination.parent, min(max_bytes, max(estimated * 2, 16 * 1024**2)))
@@ -133,6 +136,8 @@ def dump_owned_database(*, postgres_root: Path, pgdata: Path, instance_id: str,
             tables = [row[0] for row in cursor.fetchall()]
             if len(tables) > 1000:
                 raise BackupArchiveError("backup table inventory exceeded limit")
+            if set(tables) != expected_tables(schema_version):
+                raise BackupArchiveError("backup table inventory differs from schema version")
             counts = []
             for table in tables:
                 cursor.execute(sql.SQL("SELECT count(*) FROM public.{}").format(sql.Identifier(table)))
@@ -151,7 +156,7 @@ def dump_owned_database(*, postgres_root: Path, pgdata: Path, instance_id: str,
                     digest.update(block)
             size = pending.stat().st_size
             _commit_new_file(pending, destination)
-            return DatabaseDump(destination, digest.hexdigest(), size, 1, tuple(counts))
+            return DatabaseDump(destination, digest.hexdigest(), size, schema_version, tuple(counts))
     except BackupArchiveError:
         raise
     except Exception:

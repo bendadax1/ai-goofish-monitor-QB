@@ -127,8 +127,9 @@ internal static class PortableBusinessBackupRunner
             var fileCount = 0;
             while (true)
             {
-                var line = await process.StandardOutput.ReadLineAsync(deadline.Token).ConfigureAwait(false);
-                if (line is null || line.Length > 4096)
+                var line = await PortableSchemaMigrationRunner.ReadBoundedLineAsync(
+                    process.StandardOutput, deadline.Token).ConfigureAwait(false);
+                if (line is null)
                 {
                     throw new InvalidOperationException("备份辅助进程协议中断或输出超限。");
                 }

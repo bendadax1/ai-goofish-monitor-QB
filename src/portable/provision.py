@@ -57,10 +57,13 @@ def _owned_marker(pgdata: str, instance_id: str):
     return path.resolve(strict=True), identifier
 
 
-def provision(pgdata: str, instance_id: str, *, environ=None, seed_root: Path | None = None):
+def provision(pgdata: str, instance_id: str, *, environ=None, seed_root: Path | None = None,
+              schema_version: int = 1):
     environment = os.environ if environ is None else environ
     connection = None
     try:
+        if type(schema_version) is not int or schema_version not in (1, 2):
+            raise ProvisionError("unsupported schema version for new instance")
         data_root, identifier = _owned_marker(pgdata, instance_id)
         target = validate_database_target(environment.get(ADMIN_DSN_ENV, ""), environ=environment)
         parameters = dict(target.parameters)
@@ -102,10 +105,12 @@ def provision(pgdata: str, instance_id: str, *, environ=None, seed_root: Path | 
             dsn = psycopg2.extensions.make_dsn(**{key: parameters[key] for key in ("host", "hostaddr", "port", "dbname", "user", "password")})
             engine = _engine_from_environment({ADMIN_DSN_ENV: dsn})
             try:
-                initialize_schema(engine, roles=roles, seed_root=seed_root)
+                initialize_schema(engine, roles=roles, seed_root=seed_root,
+                                  target_version=schema_version)
             finally:
                 engine.dispose()
-        return {"database": DATABASE_NAME, "app_role": APP_ROLE, "probe_role": PROBE_ROLE, "schema_version": 1}
+        return {"database": DATABASE_NAME, "app_role": APP_ROLE, "probe_role": PROBE_ROLE,
+                "schema_version": schema_version}
     except Exception:
         logger.error("Portable database provisioning failed; no existing data was removed", extra={"event": "portable_provision_failed"})
         raise ProvisionError("database provisioning failed; inspect initialization state before retrying") from None
@@ -121,10 +126,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Provision a new Launcher-owned PostgreSQL instance")
     parser.add_argument("--pgdata", required=True)
     parser.add_argument("--instance-id", required=True)
+    parser.add_argument("--schema-version", type=int, choices=(1, 2), default=1)
     args = parser.parse_args(argv)
     try:
         program_root = Path(__file__).resolve().parents[2]
-        result = provision(args.pgdata, args.instance_id, seed_root=program_root / "defaults")
+        result = provision(args.pgdata, args.instance_id, seed_root=program_root / "defaults",
+                           schema_version=args.schema_version)
     except ProvisionError as error:
         print(str(error), file=__import__("sys").stderr)
         return 2

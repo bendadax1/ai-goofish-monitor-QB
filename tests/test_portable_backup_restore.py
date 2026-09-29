@@ -10,6 +10,7 @@ from unittest.mock import patch
 from src.portable.backup_archive import BackupArchiveError
 from src.portable.backup_restore import _assert_new_business_file, _inspect_dump_toc, _manifest
 from src.portable.schema import _application_table_names
+from src.portable.schema_catalog import V2_TABLES
 
 
 class BusinessRestoreTests(unittest.TestCase):
@@ -60,6 +61,23 @@ class BusinessRestoreTests(unittest.TestCase):
         result = _manifest(self.root, names, {"schema_version": 1, "instance_id": "source-id"})
         self.assertEqual(len(result["files"]), 0)
 
+    def test_v2_manifest_requires_matching_version_policy_and_table_set(self):
+        value = self._payload()
+        value["schema_version"] = 2
+        value["database"]["table_counts"] = {name: 0 for name in V2_TABLES}
+        value["restore"]["grant_policy"] = "portable-schema-v2"
+        names = ("database.dump", "backup.json", "recovery-keys.json", "files/assets/中文.txt")
+        manifest = self.root / "backup.json"
+        manifest.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(_manifest(self.root, names,
+            {"schema_version": 2, "instance_id": "source-id"}), value)
+        with self.assertRaisesRegex(BackupArchiveError, "manifest"):
+            _manifest(self.root, names, {"schema_version": 1, "instance_id": "source-id"})
+        value["database"]["table_counts"].pop("price_observations")
+        manifest.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaisesRegex(BackupArchiveError, "manifest"):
+            _manifest(self.root, names, {"schema_version": 2, "instance_id": "source-id"})
+
     def test_manifest_rejects_path_and_hash_tampering(self):
         value = self._payload()
         names = ("database.dump", "backup.json", "recovery-keys.json", "files/assets/中文.txt")
@@ -82,6 +100,43 @@ class BusinessRestoreTests(unittest.TestCase):
             with patch("src.portable.backup_restore.subprocess.run", side_effect=fake_run):
                 with self.assertRaises(BackupArchiveError):
                     _inspect_dump_toc(self.root / "pg_restore.exe", self.root / "database.dump", self.root)
+
+    def test_toc_accepts_v1_public_index_but_rejects_unknown_index(self):
+        tables = "".join(f"{number}; 1259 1 TABLE public {table} owner\n"
+            for number, table in enumerate((*_application_table_names(), "app_schema_version"), 1))
+
+        class Result:
+            returncode = 0
+
+        def check_index(name):
+            def fake_run(_args, **kwargs):
+                kwargs["stdout"].write((tables + f"99; 1259 1 INDEX public {name} owner\n").encode("utf-8"))
+                return Result()
+            with patch("src.portable.backup_restore.subprocess.run", side_effect=fake_run):
+                _inspect_dump_toc(self.root / "pg_restore.exe", self.root / "database.dump", self.root)
+
+        check_index("ix_public_users_username")
+        with self.assertRaisesRegex(BackupArchiveError, "unknown index"):
+            check_index("ix_public_unknown_index")
+
+    def test_v2_toc_accepts_new_index_only_for_v2(self):
+        tables = "".join(f"{number}; 1259 1 TABLE public {table} owner\n"
+            for number, table in enumerate(sorted(V2_TABLES), 1))
+
+        class Result:
+            returncode = 0
+
+        def fake_run(_args, **kwargs):
+            kwargs["stdout"].write((tables +
+                "99; 1259 1 INDEX public idx_price_owner_item_observed owner\n").encode("utf-8"))
+            return Result()
+
+        with patch("src.portable.backup_restore.subprocess.run", side_effect=fake_run):
+            _inspect_dump_toc(self.root / "pg_restore.exe", self.root / "database.dump",
+                              self.root, schema_version=2)
+            with self.assertRaises(BackupArchiveError):
+                _inspect_dump_toc(self.root / "pg_restore.exe", self.root / "database.dump",
+                                  self.root, schema_version=1)
 
     def test_existing_business_file_is_never_replaced(self):
         target = self.root / "target"

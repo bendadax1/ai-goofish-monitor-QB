@@ -60,6 +60,9 @@ internal static class RealPortableStack
             pgStarted = true;
             await postgres.StartAsync(CancellationToken.None);
             var bootstrap = Path.Combine(app, "scripts", "portable", "python-bootstrap.py");
+            var versionLine = File.ReadLines(Path.Combine(app, "src", "version.py"))
+                .First(line => line.StartsWith("VERSION = \"", StringComparison.Ordinal));
+            var appVersion = versionLine.Split('"')[1];
             stage = "provision";
             var start = new ProcessStartInfo(python) {
                 UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = data,
@@ -93,8 +96,8 @@ internal static class RealPortableStack
                     mode is PythonServiceMode.Normal ? setupToken : null);
                 stage = "python-" + mode;
                 var options = new WindowsPythonOptions(
-                    python, bootstrap, app, data, cache, browser, Port(), "V1.0.4.5", mode,
-                    1, 1, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(15));
+                    python, bootstrap, app, data, cache, browser, Port(), appVersion, mode,
+                    1, 2, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(15));
                 service = new WindowsPythonComponent(lease, secrets, options, endpoints);
                 pythonStartAttempted = true;
                 await service.StartAsync(CancellationToken.None);
@@ -131,6 +134,8 @@ internal static class RealPortableStack
         catch (Exception exception)
         {
             Console.Error.WriteLine($"REAL_STACK_FAILED stage={stage} category={exception.GetType().Name}");
+            if (exception is PythonLifecycleException lifecycle)
+                Console.Error.WriteLine($"REAL_STACK_SAFE_REASON={lifecycle.Message}");
         }
         finally
         {

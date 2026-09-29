@@ -135,13 +135,14 @@ public sealed class WindowsPortableRestoreExecutor : IPortableRestoreExecutor, I
             candidate.Python = python;
             await python.StartAsync(cancellationToken).ConfigureAwait(false);
             var readiness = python.LastReadiness;
-            if (readiness is null || readiness.State is not PythonReadinessState.Ready || readiness.SchemaVersion != 1)
+            if (readiness is null || readiness.State is not PythonReadinessState.Ready ||
+                readiness.SchemaVersion != restored.SchemaVersion)
             {
-                throw new PortableRestoreException("RESTORE_MAINTENANCE_AUDIT_FAILED", "恢复后维护 Web 未确认同一 PG17 实例和 schema 1。");
+                throw new PortableRestoreException("RESTORE_MAINTENANCE_AUDIT_FAILED", "恢复后维护 Web 未确认同一 PG17 实例和 schema 版本。");
             }
 
             await StopCandidateAsync(target, candidate, cancellationToken).ConfigureAwait(false);
-            WindowsPortableProvisionStep.RecordRestoredCompletion(target.Lease, pgData, 1);
+            WindowsPortableProvisionStep.RecordRestoredCompletion(target.Lease, pgData, restored.SchemaVersion);
             return new PortableRestorePreview(
                 restored.TargetInstanceId,
                 target.RelativeRoot,

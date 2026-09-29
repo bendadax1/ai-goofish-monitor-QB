@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -290,36 +291,25 @@ async def update_config_with_new_task(new_task: dict, config_file: str = "config
         extra={"event": "config_update_start", "config_file": config_file}
     )
     try:
-        # 读取现有配置
-        config_data = []
-        if os.path.exists(config_file):
-            async with aiofiles.open(config_file, 'r', encoding='utf-8') as f:
-                content = await f.read()
-                # 处理空文件的情况
-                if content.strip():
-                    config_data = json.loads(content)
+        from src.storage.upstream_local import mutate_local_task_config
 
-        # 追加新任务
-        config_data.append(new_task)
+        def append(config_data: list[dict]) -> tuple[bool, bool]:
+            created = dict(new_task)
+            created["stable_task_id"] = str(uuid.uuid4())
+            config_data.append(created)
+            return True, True
 
-        # 写回配置文件
-        async with aiofiles.open(config_file, 'w', encoding='utf-8') as f:
-            await f.write(json.dumps(config_data, ensure_ascii=False, indent=2))
+        await asyncio.to_thread(mutate_local_task_config, Path(config_file), append,
+                                create_if_missing=True)
 
         logger.info(
             f"新任务 '{new_task.get('task_name')}' 已添加到 {config_file} 并已启用。",
             extra={"event": "config_update_success", "task_name": new_task.get("task_name"), "config_file": config_file}
         )
         return True
-    except json.JSONDecodeError:
+    except Exception:
         logger.error(
-            f"配置文件 {config_file} 格式错误，无法解析。",
-            extra={"event": "config_update_invalid", "config_file": config_file}
-        )
-        return False
-    except IOError as e:
-        logger.error(
-            f"读写配置文件失败: {e}",
+            "任务配置写入失败",
             extra={"event": "config_update_io_error", "config_file": config_file}
         )
         return False

@@ -23,6 +23,7 @@ from typing import Callable
 
 import psycopg2
 from psycopg2 import sql
+from sqlalchemy import text as sa_text
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -35,12 +36,12 @@ from src.portable.backup_archive import (
 from src.portable.backup_business import KEY_FIELDS, _clear_private_stage, _recovery_material
 from src.portable.maintenance import validate_database_target
 from src.portable.provision import APP_ROLE, DATABASE_NAME, PROBE_ROLE, _owned_marker
-from src.portable.schema import DatabaseRoles, _application_table_names, _portable_metadata, configure_role_grants
+from src.portable.schema import DatabaseRoles, configure_role_grants
+from src.portable.schema_catalog import V1_INDEXES, V2_FINGERPRINT, expected_tables
+from src.portable.schema_fingerprint import public_schema_fingerprint
+from src.portable.upstream_ddl import MIGRATION_CHECKSUM, MIGRATION_ID, V2_INDEXES
 
 logger = logging.getLogger(__name__)
-_EXPECTED_TABLES = frozenset(_application_table_names()) | {"app_schema_version"}
-_EXPECTED_INDEXES = frozenset(index.name for table in _portable_metadata().tables.values()
-    for index in table.indexes)
 _HEX = frozenset("0123456789abcdef")
 _RESTORE_TIMEOUT = 600
 _TOC_LINE = re.compile(r"^\d+; \d+ \d+ (.+)$")
@@ -57,6 +58,7 @@ class BusinessRestoreResult:
     file_count: int
     revoked_sessions: int
     private_handoff: Path
+    schema_version: int = 1
     status: str = "awaiting_target_user_dpapi_and_switch_confirmation"
 
 
@@ -83,14 +85,18 @@ def _manifest(root: Path, archive_files: tuple[str, ...], metadata: dict) -> dic
             paths.add(name.casefold())
             expected.add("files/" + name)
         counts = database["table_counts"]
+        version = value["schema_version"]
+        if type(version) is not int or version not in (1, 2):
+            raise ValueError
+        tables = expected_tables(version)
         if (value["format_version"] != 1 or value["kind"] != "business-backup"
-            or value["schema_version"] != 1 or metadata.get("schema_version") != 1
+            or metadata.get("schema_version") != version
             or value["instance_id"] != metadata.get("instance_id")
             or value["restore"] != {"postgres_major": 17, "database": DATABASE_NAME,
                 "new_instance_required": True, "fresh_database_passwords_required": True,
                 "dpapi_reprotection_required": True, "app_role": APP_ROLE,
-                "probe_role": PROBE_ROLE, "grant_policy": "portable-schema-v1"}
-            or not isinstance(counts, dict) or set(counts) != _EXPECTED_TABLES
+                "probe_role": PROBE_ROLE, "grant_policy": f"portable-schema-v{version}"}
+            or not isinstance(counts, dict) or set(counts) != tables
             or any(type(count) is not int or count < 0 for count in counts.values())
             or type(database["size"]) is not int or database["size"] < 5
             or len(database["sha256"]) != 64 or set(database["sha256"]) - _HEX
@@ -131,8 +137,10 @@ def _tool_environment(parameters: dict, work: Path, database: str) -> dict[str, 
     return environment
 
 
-def _inspect_dump_toc(executable: Path, dump: Path, work: Path) -> None:
-    """Reject non-schema-v1 objects before executing a trusted dump's SQL."""
+def _inspect_dump_toc(executable: Path, dump: Path, work: Path, *, schema_version: int = 1) -> None:
+    """Reject objects outside the archive's exact schema version before SQL."""
+    tables_expected = expected_tables(schema_version)
+    indexes_expected = V1_INDEXES if schema_version == 1 else V1_INDEXES | V2_INDEXES
     with tempfile.TemporaryFile(dir=work) as listing, tempfile.TemporaryFile(dir=work) as diagnostics:
         completed = subprocess.run([str(executable), "--list", str(dump)],
             stdin=subprocess.DEVNULL, stdout=listing, stderr=diagnostics,
@@ -167,25 +175,25 @@ def _inspect_dump_toc(executable: Path, dump: Path, work: Path) -> None:
         if kind == "SCHEMA":
             raise BackupArchiveError("database archive must not replace public schema")
         if kind == "ACL":
-            if len(fields) < 4 or fields[1] != "TABLE" or fields[2] not in _EXPECTED_TABLES:
+            if len(fields) < 4 or fields[1] != "TABLE" or fields[2] not in tables_expected:
                 raise BackupArchiveError("database archive contains unknown privileges")
             continue
         if kind in ("TABLE", "TABLE DATA"):
-            if fields[1] not in _EXPECTED_TABLES:
+            if fields[1] not in tables_expected:
                 raise BackupArchiveError("database archive contains an unknown table")
             if kind == "TABLE":
                 tables.add(fields[1])
         elif kind in ("DEFAULT", "CONSTRAINT", "FK CONSTRAINT"):
-            if fields[1] not in _EXPECTED_TABLES:
+            if fields[1] not in tables_expected:
                 raise BackupArchiveError("database archive references an unknown table")
         elif kind == "INDEX":
-            if fields[1] not in _EXPECTED_INDEXES:
+            if fields[1] not in indexes_expected:
                 raise BackupArchiveError("database archive contains an unknown index")
         elif kind in ("SEQUENCE", "SEQUENCE SET", "SEQUENCE OWNED BY"):
-            if not any(fields[1].startswith(table + "_") for table in _EXPECTED_TABLES):
+            if not any(fields[1].startswith(table + "_") for table in tables_expected):
                 raise BackupArchiveError("database archive contains an unknown " + kind.lower())
-    if tables != _EXPECTED_TABLES:
-        raise BackupArchiveError("database archive table set differs from schema v1")
+    if tables != tables_expected:
+        raise BackupArchiveError("database archive table set differs from its schema version")
 
 
 def _restore_dump(executable: Path, dump: Path, parameters: dict, work: Path) -> None:
@@ -287,7 +295,8 @@ def _prepare_empty_database(connection, parameters: dict, pgdata: Path, identifi
             ("aigoofish-instance:" + identifier,))
 
 
-def _reconcile(parameters: dict, pgdata: Path, identifier: str, counts: dict[str, int]) -> int:
+def _reconcile(parameters: dict, pgdata: Path, identifier: str, counts: dict[str, int],
+               schema_version: int) -> int:
     connection = _connect(parameters, DATABASE_NAME)
     try:
         with connection.cursor() as cursor:
@@ -301,11 +310,15 @@ def _reconcile(parameters: dict, pgdata: Path, identifier: str, counts: dict[str
             if cursor.fetchone():
                 raise BackupArchiveError("restored database contains an unknown schema")
             cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
-            if {row[0] for row in cursor.fetchall()} != _EXPECTED_TABLES:
-                raise BackupArchiveError("restored database table set differs from schema v1")
+            if {row[0] for row in cursor.fetchall()} != expected_tables(schema_version):
+                raise BackupArchiveError("restored database table set differs from its schema version")
             cursor.execute("SELECT version FROM public.app_schema_version LIMIT 2")
-            if cursor.fetchall() != [(1,)]:
+            if cursor.fetchall() != [(schema_version,)]:
                 raise BackupArchiveError("restored schema version is incompatible")
+            if schema_version == 2:
+                cursor.execute("SELECT migration_id, checksum FROM public.app_schema_migrations LIMIT 2")
+                if cursor.fetchall() != [(MIGRATION_ID, MIGRATION_CHECKSUM)]:
+                    raise BackupArchiveError("restored migration audit differs")
             for table, expected in sorted(counts.items()):
                 cursor.execute(sql.SQL("SELECT count(*) FROM public.{}").format(sql.Identifier(table)))
                 if cursor.fetchone()[0] != expected:
@@ -362,7 +375,9 @@ def restore_business_backup(*, archive_file: Path, passphrase: str, postgres_roo
         stage = staging_parent / ("restore-" + secrets.token_hex(12))
         restored = restore_backup_archive(archive_file, stage, passphrase)
         manifest = _manifest(stage, restored.files, dict(restored.metadata))
-        _inspect_dump_toc(executable, stage / "database.dump", stage)
+        schema_version = manifest["schema_version"]
+        _inspect_dump_toc(executable, stage / "database.dump", stage,
+                          schema_version=schema_version)
         if manifest["instance_id"] == instance_id:
             raise BackupArchiveError("restore requires a fresh instance identity")
         _require_disk_space(target_data_root,
@@ -378,12 +393,18 @@ def restore_business_backup(*, archive_file: Path, passphrase: str, postgres_roo
         _prepare_empty_database(connection, parameters, owned, instance_id, app_password, probe_password)
         verify_maintenance()
         _restore_dump(executable, stage / "database.dump", parameters, stage)
-        revoked = _reconcile(parameters, owned, instance_id, manifest["database"]["table_counts"])
+        revoked = _reconcile(parameters, owned, instance_id,
+                             manifest["database"]["table_counts"], schema_version)
         dsn = psycopg2.extensions.make_dsn(**{**{key: parameters[key] for key in
             ("host", "hostaddr", "port", "user", "password")}, "dbname": DATABASE_NAME})
         from src.portable.schema import _engine_from_environment, ADMIN_DATABASE_ENVIRONMENT_VARIABLE
         engine = _engine_from_environment({ADMIN_DATABASE_ENVIRONMENT_VARIABLE: dsn})
         try:
+            if schema_version == 2:
+                with engine.begin() as validation:
+                    validation.execute(sa_text('SET LOCAL search_path = pg_catalog, "public"'))
+                    if public_schema_fingerprint(validation) != V2_FINGERPRINT:
+                        raise BackupArchiveError("restored schema v2 structure differs")
             configure_role_grants(engine, DatabaseRoles(parameters["user"], APP_ROLE, PROBE_ROLE))
         finally:
             engine.dispose()
@@ -415,7 +436,8 @@ def restore_business_backup(*, archive_file: Path, passphrase: str, postgres_roo
         _clear_private_stage(stage, staging_parent)
         stage = None
         return BusinessRestoreResult(instance_id, manifest["instance_id"], restored.sha256,
-            dict(manifest["database"]["table_counts"]), len(manifest["files"]), revoked, handoff)
+            dict(manifest["database"]["table_counts"]), len(manifest["files"]), revoked, handoff,
+            schema_version=schema_version)
     except BackupArchiveError:
         raise
     except Exception:

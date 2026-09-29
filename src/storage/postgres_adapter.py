@@ -159,8 +159,36 @@ class PostgresAdapter(StorageInterface):
         
         return result
 
+    def list_upstream_records(self, table: str, *, owner_id: str,
+                              limit: int = 100) -> List[Dict[str, Any]]:
+        """B2 新表的显式 owner 查询边界；业务路由须从认证会话传入 owner。"""
+        order_columns = {
+            "result_hidden_items": "item_id",
+            "result_blacklist_rules": "id",
+            "result_view_preferences": "page_key",
+            "price_observations": "id",
+            "criteria_generation_jobs": "id",
+        }
+        if table not in order_columns or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("invalid upstream query scope")
+        try:
+            owner = str(UUID(owner_id))
+        except (TypeError, ValueError, AttributeError):
+            raise ValueError("upstream owner identity is invalid") from None
+        from sqlalchemy import text
+        with self.get_session() as session:
+            version = session.execute(text("SELECT version FROM public.app_schema_version LIMIT 2")).fetchall()
+            if version != [(2,)]:
+                raise RuntimeError("upstream schema v2 is unavailable")
+            rows = session.execute(text(
+                f'SELECT * FROM public."{table}" WHERE owner_id = :owner '
+                f'ORDER BY "{order_columns[table]}" LIMIT :limit'
+            ), {"owner": owner, "limit": limit}).mappings().all()
+            return [dict(row) for row in rows]
+
     def _split_task_payload(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """拆分任务数据，将未知字段收敛到 filters 中"""
+        task_data = {key: value for key, value in task_data.items() if key != "stable_task_id"}
         allowed_keys = {column.name for column in Task.__table__.columns}
         base_data: Dict[str, Any] = {}
         extra_data: Dict[str, Any] = {}

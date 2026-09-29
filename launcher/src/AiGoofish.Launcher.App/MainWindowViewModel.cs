@@ -454,6 +454,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         !_webPortIntentUnresolved && !_webPortRefreshFailed &&
         _coordinator?.Snapshot.State is LauncherState.Running && _realHost is not null;
 
+    public bool CanUpgradeSchema => CanCreateBusinessBackup && _realHost?.CurrentSchemaVersion == 1;
+
     public bool CanRestoreBusinessBackup =>
         !_isSimulation && _bundle is not null && !_restoreInFlight && !_backupInFlight && !_shutdownInProgress &&
         !_webPortIntentUnresolved && !_webPortRefreshFailed &&
@@ -867,6 +869,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 PhaseMessage = "正在停写并创建加密业务备份。Web 与 PostgreSQL 将安全停止；过程可能需要较长时间。";
                 OnPropertyChanged(nameof(CanCreateBusinessBackup));
+                OnPropertyChanged(nameof(CanUpgradeSchema));
             });
 
             try
@@ -883,7 +886,67 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         finally
         {
             _backupInFlight = false;
-            await Dispatcher.UIThread.InvokeAsync(() => OnPropertyChanged(nameof(CanCreateBusinessBackup)));
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                OnPropertyChanged(nameof(CanCreateBusinessBackup));
+                OnPropertyChanged(nameof(CanUpgradeSchema));
+            });
+            _realOperationGate.Release();
+        }
+    }
+
+    public async Task UpgradeSchemaAsync(string selectedDirectory, string passphrase)
+    {
+        if (!await _realOperationGate.WaitAsync(0).ConfigureAwait(false))
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => PhaseMessage = "已有生命周期操作正在进行，请稍后重试升级。");
+            return;
+        }
+        try
+        {
+            var host = _realHost;
+            if (!CanUpgradeSchema || host is null || !CanUseBackupPassphrase(passphrase))
+            {
+                await Dispatcher.UIThread.InvokeAsync(() => PhaseMessage = "升级未开始：须运行真实 schema v1 实例并输入有效备份口令。");
+                return;
+            }
+            var folder = Path.GetFullPath(selectedDirectory);
+            if (!Directory.Exists(folder) || IsWithinDirectory(host.DataRoot, folder))
+            {
+                await Dispatcher.UIThread.InvokeAsync(() => PhaseMessage = "升级未开始：请选择数据目录之外的现有备份文件夹。");
+                return;
+            }
+            var destination = CreateNewBackupPath(folder, DateTimeOffset.Now);
+            _backupInFlight = true;
+            await SetBusinessHostReadyAsync(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                PhaseMessage = "正在停写、备份并升级到 schema v2；完成前不要关闭 Launcher。";
+                OnPropertyChanged(nameof(CanCreateBusinessBackup));
+                OnPropertyChanged(nameof(CanUpgradeSchema));
+            });
+            try
+            {
+                var result = await host.UpgradeSchemaWithBackupAndStopAsync(destination, passphrase)
+                    .ConfigureAwait(false);
+                await Dispatcher.UIThread.InvokeAsync(() => PhaseMessage =
+                    $"schema v{result.SchemaVersion} 升级已核验；备份 SHA-256：{result.Backup.Sha256} · 文件：{result.Backup.Destination}。服务已停止，请手动启动。");
+            }
+            catch (Exception exception)
+            {
+                Trace.TraceError($"schema 升级未确认成功；异常类型：{exception.GetType().Name}");
+                await Dispatcher.UIThread.InvokeAsync(() => PhaseMessage =
+                    "升级未确认成功，服务保持停止。备份文件可能已创建；请检查所选文件夹并保留现状，不要反复点击升级。");
+            }
+        }
+        finally
+        {
+            _backupInFlight = false;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                OnPropertyChanged(nameof(CanCreateBusinessBackup));
+                OnPropertyChanged(nameof(CanUpgradeSchema));
+            });
             _realOperationGate.Release();
         }
     }
@@ -1206,6 +1269,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             _shutdownInProgress = true;
             OnPropertyChanged(nameof(CanCreateBusinessBackup));
+            OnPropertyChanged(nameof(CanUpgradeSchema));
             IsPrimaryEnabled = false;
             IsStopEnabled = false;
             IsCancelEnabled = false;
@@ -2278,6 +2342,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         OnPropertyChanged(nameof(CanCreateBusinessBackup));
+        OnPropertyChanged(nameof(CanUpgradeSchema));
         NotifyWebPortActions();
     }
 

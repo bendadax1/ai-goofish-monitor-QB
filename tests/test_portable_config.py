@@ -89,6 +89,8 @@ class PortableConfigTests(unittest.TestCase):
                 "PYTHONPATH": str(_REPOSITORY_ROOT),
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
+            if "SYSTEMROOT" in os.environ:
+                process_environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
             process_environment.update(environment or {})
             completed = subprocess.run(
                 [sys.executable, "-B", "-c", _SUBPROCESS_STUBS + "\n" + textwrap.dedent(source)],

@@ -25,6 +25,7 @@ _ALLOWED_ENTRIES = {
     "login": Path("login.py"),
     "backup": Path("portable_backup.py"),
     "restore": Path("portable_restore.py"),
+    "migrate": Path("portable_migrate.py"),
 }
 
 

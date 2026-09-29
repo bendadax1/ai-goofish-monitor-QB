@@ -17,6 +17,7 @@ from filelock import FileLock
 from .interface import StorageInterface
 from .utils import hash_password, verify_password, hash_token, generate_uuid
 from src.config import get_env_value, get_bool_env_value, DB_DEDUP_SCOPE
+from src.storage.upstream_local import LocalUpstreamStore, mutate_local_task_config
 
 class LocalStorageAdapter(StorageInterface):
     """
@@ -52,6 +53,14 @@ class LocalStorageAdapter(StorageInterface):
     def _get_config_path(self) -> Path:
         """获取任务配置文件路径"""
         return self.base_path / "config.json"
+
+    def upstream_store(self, *, owner_id: str) -> LocalUpstreamStore:
+        """v2 旁文件只接受已认证的本地用户；不会在普通读取时自动升级。"""
+        if owner_id != "local_admin":
+            raise PermissionError("local upstream owner is not authenticated")
+        store = LocalUpstreamStore(self.base_path.absolute())
+        store.read("hidden_items")
+        return store
     
     def _load_config(self) -> List[Dict[str, Any]]:
         """加载任务配置"""
@@ -60,12 +69,6 @@ class LocalStorageAdapter(StorageInterface):
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return []
-    
-    def _save_config(self, config: List[Dict[str, Any]]):
-        """保存任务配置"""
-        config_path = self._get_config_path()
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
     
     # ============== 用户管理（本地模式简化实现）==============
     
@@ -213,57 +216,54 @@ class LocalStorageAdapter(StorageInterface):
     
     def save_task(self, task: Dict[str, Any], owner_id: Optional[str] = None) -> Dict[str, Any]:
         """保存任务"""
-        tasks = self._load_config()
-        task_name = task.get("task_name")
-        
-        # 查找是否存在
-        found = False
-        for i, t in enumerate(tasks):
-            if t.get("task_name") == task_name:
-                tasks[i] = task
-                found = True
-                break
-        
-        if not found:
-            # 设置order
-            if "order" not in task:
-                max_order = max([t.get("order", 0) for t in tasks], default=0)
-                task["order"] = max_order + 1
-            tasks.append(task)
-        
-        self._save_config(tasks)
-        return task
+        def transform(tasks: List[Dict[str, Any]]) -> tuple[Dict[str, Any], bool]:
+            payload = dict(task)
+            for index, existing in enumerate(tasks):
+                if existing.get("task_name") == payload.get("task_name"):
+                    if existing.get("stable_task_id") is None:
+                        payload.pop("stable_task_id", None)
+                    else:
+                        payload["stable_task_id"] = existing["stable_task_id"]
+                    tasks[index] = payload
+                    return payload, True
+            payload["stable_task_id"] = str(uuid.uuid4())
+            if "order" not in payload:
+                payload["order"] = max([t.get("order", 0) for t in tasks], default=0) + 1
+            tasks.append(payload)
+            return payload, True
+
+        return mutate_local_task_config(self._get_config_path(), transform,
+                                        create_if_missing=True)
     
     def delete_task(self, task_name: str, owner_id: Optional[str] = None) -> bool:
         """删除任务"""
-        tasks = self._load_config()
-        original_len = len(tasks)
-        tasks = [t for t in tasks if t.get("task_name") != task_name]
-        
-        if len(tasks) < original_len:
-            self._save_config(tasks)
-            return True
-        return False
+        def transform(tasks: List[Dict[str, Any]]) -> tuple[bool, bool]:
+            original_len = len(tasks)
+            tasks[:] = [item for item in tasks if item.get("task_name") != task_name]
+            changed = len(tasks) < original_len
+            return changed, changed
+
+        return mutate_local_task_config(self._get_config_path(), transform,
+                                        create_if_missing=True)
     
     def update_task_order(self, ordered_names: List[str], owner_id: Optional[str] = None) -> bool:
         """更新任务排序"""
-        tasks = self._load_config()
-        name_to_task = {t["task_name"]: t for t in tasks}
-        
-        reordered = []
-        for i, name in enumerate(ordered_names):
-            if name in name_to_task:
-                task = name_to_task[name]
-                task["order"] = i + 1
-                reordered.append(task)
-        
-        # 添加未在列表中的任务
-        for task in tasks:
-            if task["task_name"] not in ordered_names:
-                reordered.append(task)
-        
-        self._save_config(reordered)
-        return True
+        def transform(tasks: List[Dict[str, Any]]) -> tuple[bool, bool]:
+            name_to_task = {item["task_name"]: item for item in tasks}
+            reordered = []
+            for index, name in enumerate(ordered_names):
+                if name in name_to_task:
+                    item = name_to_task[name]
+                    item["order"] = index + 1
+                    reordered.append(item)
+            for item in tasks:
+                if item["task_name"] not in ordered_names:
+                    reordered.append(item)
+            tasks[:] = reordered
+            return True, True
+
+        return mutate_local_task_config(self._get_config_path(), transform,
+                                        create_if_missing=True)
     
     # ============== 监控结果管理 ==============
     

@@ -1,10 +1,12 @@
 import asyncio
+import copy
 import json
 import os
 import re
 import signal
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -24,6 +26,7 @@ from src.portable.app_paths import (
 from src.prompt_utils import CriteriaGenerationTimeoutError, generate_criteria
 from src.scraper import delete_task_stats_file, get_task_stats
 from src.storage import get_storage
+from src.storage.upstream_local import mutate_local_task_config
 from src.task import add_task, get_task, update_task
 from src.user_file_store import build_virtual_prompt_path, resolve_virtual_task_file
 from src.web.auth import get_current_user, is_multi_user_mode
@@ -68,6 +71,8 @@ def _get_owner_id(request: Optional[Request] = None) -> Optional[str]:
 def _normalize_task_dict(task: Dict[str, Any], index: int) -> Dict[str, Any]:
     """补齐任务默认字段，保证前端渲染稳定。"""
     normalized = dict(task or {})
+    if not normalized.get("stable_task_id") and isinstance(normalized.get("id"), str):
+        normalized["stable_task_id"] = normalized["id"]
     normalized["id"] = index
     normalized.setdefault("order", index)
     normalized.setdefault("enabled", True)
@@ -226,25 +231,50 @@ def _make_unique_task_name(existing_names: List[str], desired_name: str) -> str:
         index += 1
 
 
+class _LocalTasksSnapshot(list):
+    """读时快照；普通 Web 写入只能覆盖自己读过的版本。"""
+
+    def __init__(self, tasks: List[Dict[str, Any]]):
+        super().__init__(tasks)
+        self.original = copy.deepcopy(tasks)
+
+
 async def _load_local_tasks() -> List[Dict[str, Any]]:
     try:
         async with aiofiles.open(CONFIG_FILE, "r", encoding="utf-8") as f:
             content = await f.read()
             if not content.strip():
-                return []
+                return _LocalTasksSnapshot([])
             data = json.loads(content)
-            return data if isinstance(data, list) else []
+            return _LocalTasksSnapshot(data if isinstance(data, list) else [])
     except FileNotFoundError:
-        return []
+        return _LocalTasksSnapshot([])
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"配置文件格式错误: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取配置文件失败: {exc}") from exc
 
 
-async def _save_local_tasks(tasks: List[Dict[str, Any]]) -> None:
-    async with aiofiles.open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        await f.write(json.dumps(tasks, ensure_ascii=False, indent=2))
+async def _save_local_tasks(tasks: List[Dict[str, Any]], *,
+                            original: List[Dict[str, Any]] | None = None) -> None:
+    expected = original if original is not None else getattr(tasks, "original", None)
+    if expected is None:
+        raise HTTPException(status_code=500, detail="本地任务写入缺少原始版本")
+
+    def transform(current: List[Dict[str, Any]]) -> tuple[bool, bool]:
+        if current != expected:
+            return False, False
+        current[:] = copy.deepcopy(tasks)
+        return True, True
+
+    try:
+        written = await asyncio.to_thread(mutate_local_task_config, Path(CONFIG_FILE),
+                                          transform, create_if_missing=True)
+    except Exception:
+        logger.error("本地任务配置原子写入失败", extra={"event": "local_tasks_write_failed"})
+        raise HTTPException(status_code=500, detail="本地任务保存失败") from None
+    if not written:
+        raise HTTPException(status_code=409, detail="任务配置已变化，请刷新后重试")
 
 
 async def _build_runtime_task_config(owner_id: str, task_name: str) -> str:
@@ -709,7 +739,7 @@ async def reorder_tasks(payload: TaskOrderUpdate, request: Request):
     reordered = [tasks[task_id] for task_id in ordered_ids]
     for idx, task in enumerate(reordered):
         task["order"] = idx
-    await _save_local_tasks(reordered)
+    await _save_local_tasks(reordered, original=tasks.original)
     await _refresh_local_scheduler()
     return {"message": "任务顺序已更新"}
 
@@ -832,6 +862,7 @@ async def duplicate_task(task_id: int, request: Request):
 
     payload = dict(source_task)
     payload.pop("id", None)
+    payload.pop("stable_task_id", None)
     payload.pop("process_pid", None)
     payload["task_name"] = new_task_name
     payload["is_running"] = False

@@ -3,6 +3,7 @@ import asyncio
 import sys
 import re
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -17,6 +18,7 @@ from src.portable.app_paths import (
     portable_worker_environment,
 )
 from src.storage import get_storage
+from src.storage.upstream_local import mutate_local_task_config
 from src.web.auth import is_multi_user_mode
 
 
@@ -332,24 +334,19 @@ async def _set_all_tasks_stopped_in_config():
                 )
             return
 
-        async with aiofiles.open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            content = await f.read()
-            if not content.strip():
-                return
-            tasks = json.loads(content)
+        def reset_flags(tasks: List[Dict[str, Any]]) -> tuple[bool, bool]:
+            changed = any(task.get("is_running") or task.get("generating_ai_criteria")
+                          for task in tasks)
+            if changed:
+                for task in tasks:
+                    task["is_running"] = False
+                    task["generating_ai_criteria"] = False
+            return changed, changed
 
-        needs_update = any(task.get("is_running") or task.get("generating_ai_criteria") for task in tasks)
-        if not needs_update:
-            return
-
-        for task in tasks:
-            task["is_running"] = False
-            task["generating_ai_criteria"] = False
-
-        async with aiofiles.open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(tasks, ensure_ascii=False, indent=2))
-
-        logger.info("本地模式任务状态已重置", extra={"event": "tasks_reset_local"})
+        changed = await asyncio.to_thread(mutate_local_task_config, Path(CONFIG_FILE),
+                                          reset_flags, create_if_missing=True)
+        if changed:
+            logger.info("本地模式任务状态已重置", extra={"event": "tasks_reset_local"})
 
     except FileNotFoundError:
         return

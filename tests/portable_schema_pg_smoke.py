@@ -25,6 +25,11 @@ import psycopg2
 from psycopg2 import sql
 
 from src.portable import schema
+from src.portable.schema_catalog import V2_TABLES
+from src.portable.upstream_ddl import CREATE_STATEMENTS, MIGRATION_CHECKSUM, MIGRATION_ID, ddl_checksum
+from src.portable.schema_fingerprint import public_schema_fingerprint
+from src.portable.schema_catalog import V1_FINGERPRINT, V2_FINGERPRINT
+from src.portable.upstream_migration import UpstreamMigrationError, migrate_upstream_schema
 from tests import portable_pg_smoke as pg
 
 
@@ -400,6 +405,7 @@ def _run_schema_cases(
     if _query(port, damaged, admin, password, "SELECT count(*) FROM public.app_schema_version") != [(2,)]:
         raise pg.SmokeFailure("damaged version rejection modified existing data")
 
+
     cli_database = _database_name()
     _create_role_and_database(port=port, admin=admin, password=password, app=app, probe=probe, database=cli_database, raw_secrets=raw_secrets)
     allowed_environment = {name: os.environ[name] for name in ("COMSPEC", "PATH", "SYSTEMROOT", "WINDIR") if name in os.environ}
@@ -446,6 +452,269 @@ def _run_schema_cases(
         engine.dispose()
     _check_real_web(port, web_database, web_app, web_app_password, web_probe, web_probe_password, test_root, raw_secrets)
 
+
+def _check_v2_ddl_case(*, port: int, admin: str, password: str, app: str, probe: str,
+                       raw_secrets: list[str], instance_id: str,
+                       fingerprint_only: bool = False) -> None:
+    """独立 v1 库中解析固定 DDL，事务回滚后核对 v1 完整保留。"""
+    ddl_database = _database_name()
+    app_password, probe_password = _create_role_and_database(
+        port=port, admin=admin, password=password, app=app, probe=probe,
+        database=ddl_database, raw_secrets=raw_secrets)
+    engine = _admin_engine(port=port, database=ddl_database, user=admin, password=password)
+    class _ExpectedDdlRollback(Exception):
+        pass
+    try:
+        roles = schema.DatabaseRoles(admin, app, probe)
+        schema.initialize_schema(engine, roles=roles)
+        if ddl_checksum() != MIGRATION_CHECKSUM:
+            raise pg.SmokeFailure("v2 DDL checksum differs from frozen input")
+        with engine.begin() as connection:
+            connection.execute(schema.text('SET LOCAL search_path = pg_catalog, "public"'))
+            v1_fingerprint = public_schema_fingerprint(connection)
+        try:
+            with engine.begin() as connection:
+                connection.execute(schema.text('SET LOCAL search_path = pg_catalog, "public"'))
+                for statement in CREATE_STATEMENTS:
+                    connection.execute(schema.text(statement))
+                connection.execute(schema.text(
+                    'ALTER TABLE public.app_schema_version DROP CONSTRAINT app_schema_version_version_check'
+                ))
+                connection.execute(schema.text(
+                    'ALTER TABLE public.app_schema_version ADD CONSTRAINT app_schema_version_version_check '
+                    'CHECK (version IN (1, 2))'
+                ))
+                connection.execute(schema.text('UPDATE public.app_schema_version SET version = 2'))
+                connection.execute(schema.text(
+                    "INSERT INTO public.app_schema_migrations (migration_id, checksum) "
+                    "VALUES ('002_upstream_features', :checksum)"
+                ), {"checksum": MIGRATION_CHECKSUM})
+                tables = {row[0] for row in connection.execute(schema.text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                )).fetchall()}
+                if tables != V2_TABLES:
+                    raise pg.SmokeFailure("v2 DDL did not create the exact table set")
+                v2_fingerprint = public_schema_fingerprint(connection)
+                raise _ExpectedDdlRollback()
+        except _ExpectedDdlRollback:
+            pass
+    finally:
+        engine.dispose()
+    if _query(port, ddl_database, admin, password,
+              "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename") != [
+                  (name,) for name in sorted(schema._application_table_names() + (schema.VERSION_TABLE_NAME,))
+              ]:
+        raise pg.SmokeFailure("rolled-back v2 DDL altered the v1 database")
+    if fingerprint_only:
+        print(f"UPSTREAM_SCHEMA_FINGERPRINTS v1={v1_fingerprint} v2={v2_fingerprint}")
+        return
+    if (v1_fingerprint, v2_fingerprint) != (V1_FINGERPRINT, V2_FINGERPRINT):
+        raise pg.SmokeFailure("frozen schema fingerprints differ from isolated PostgreSQL")
+    identity = instance_id
+    _query(port, ddl_database, admin, password,
+           f'COMMENT ON DATABASE "{ddl_database}" IS %s', ("aigoofish-instance:" + identity,))
+    pgdata = Path(_query(port, ddl_database, admin, password, "SHOW data_directory")[0][0])
+    engine = _admin_engine(port=port, database=ddl_database, user=admin, password=password)
+    try:
+        checks = []
+        def maintenance():
+            checks.append("maintenance")
+        def backup():
+            checks.append("backup")
+        result = migrate_upstream_schema(engine, roles, pgdata=pgdata, instance_id=identity,
+                                         verify_maintenance=maintenance, verify_backup=backup)
+        if (result.version, result.status) != (2, "applied") or checks != [
+            "maintenance", "backup", "maintenance", "backup", "maintenance",
+        ]:
+            raise pg.SmokeFailure("v2 migration did not verify its safety inputs")
+        repeat = migrate_upstream_schema(engine, roles, pgdata=pgdata, instance_id=identity,
+                                         verify_maintenance=maintenance, verify_backup=backup)
+        if (repeat.version, repeat.status) != (2, "already_applied"):
+            raise pg.SmokeFailure("v2 migration was not idempotent")
+        if _query(port, ddl_database, admin, password,
+                  "SELECT version FROM public.app_schema_version") != [(2,)]:
+            raise pg.SmokeFailure("v2 migration did not update version")
+        try:
+            migrate_upstream_schema(engine, roles, pgdata=pgdata.parent, instance_id=identity,
+                                    verify_maintenance=maintenance, verify_backup=backup)
+        except UpstreamMigrationError:
+            pass
+        else:
+            raise pg.SmokeFailure("migration accepted the wrong PGDATA")
+    finally:
+        engine.dispose()
+    if _query(port, ddl_database, app, app_password,
+              "SELECT count(*) FROM public.result_hidden_items") != [(0,)]:
+        raise pg.SmokeFailure("app cannot read v2 business tables")
+    if _query(port, ddl_database, probe, probe_password,
+              "SELECT version FROM public.app_schema_version") != [(2,)]:
+        raise pg.SmokeFailure("probe cannot read v2 version")
+    for role, role_password, statement in (
+        (app, app_password, "CREATE TABLE public.forbidden_v2_ddl (id integer)"),
+        (app, app_password, "SELECT migration_id FROM public.app_schema_migrations"),
+        (probe, probe_password, "SELECT owner_id FROM public.result_hidden_items"),
+    ):
+        try:
+            _query(port, ddl_database, role, role_password, statement)
+        except psycopg2.errors.InsufficientPrivilege:
+            pass
+        else:
+            raise pg.SmokeFailure("v2 database role exceeded its grant boundary")
+
+    # 已升级结构的权限或审计行漂移也不能被当作幂等成功。
+    _query(port, ddl_database, admin, password,
+           f'GRANT SELECT ON public.app_schema_migrations TO "{app}"')
+    engine = _admin_engine(port=port, database=ddl_database, user=admin, password=password)
+    try:
+        try:
+            migrate_upstream_schema(engine, roles, pgdata=pgdata, instance_id=identity,
+                                    verify_maintenance=lambda: None, verify_backup=lambda: None)
+        except UpstreamMigrationError:
+            pass
+        else:
+            raise pg.SmokeFailure("migration accepted elevated app audit privileges")
+        _query(port, ddl_database, admin, password,
+               f'REVOKE SELECT ON public.app_schema_migrations FROM "{app}"')
+        _query(port, ddl_database, admin, password,
+               "UPDATE public.app_schema_migrations SET checksum = %s",
+               ("0" * 64,))
+        try:
+            migrate_upstream_schema(engine, roles, pgdata=pgdata, instance_id=identity,
+                                    verify_maintenance=lambda: None, verify_backup=lambda: None)
+        except UpstreamMigrationError:
+            pass
+        else:
+            raise pg.SmokeFailure("migration accepted a changed audit checksum")
+    finally:
+        engine.dispose()
+
+    def fresh_v1_database():
+        name = _database_name()
+        _create_role_and_database(port=port, admin=admin, password=password, app=app,
+                                  probe=probe, database=name, raw_secrets=raw_secrets)
+        target_engine = _admin_engine(port=port, database=name, user=admin, password=password)
+        schema.initialize_schema(target_engine, roles=roles)
+        target_identity = instance_id
+        _query(port, name, admin, password, f'COMMENT ON DATABASE "{name}" IS %s',
+               ("aigoofish-instance:" + target_identity,))
+        return name, target_identity, target_engine
+
+    # 未知对象必须在任何迁移 DDL 前拒绝，且不修补原库。
+    unknown_name, unknown_id, unknown_engine = fresh_v1_database()
+    try:
+        _query(port, unknown_name, admin, password,
+               "CREATE TABLE public.unknown_before_migration (id integer)")
+        try:
+            migrate_upstream_schema(unknown_engine, roles, pgdata=pgdata,
+                                    instance_id=unknown_id,
+                                    verify_maintenance=lambda: None, verify_backup=lambda: None)
+        except UpstreamMigrationError:
+            pass
+        else:
+            raise pg.SmokeFailure("migration accepted unknown v1 structure")
+        if _query(port, unknown_name, admin, password,
+                  "SELECT version FROM public.app_schema_version") != [(1,)]:
+            raise pg.SmokeFailure("unknown schema rejection changed version")
+    finally:
+        unknown_engine.dispose()
+
+    extra_name, extra_id, extra_engine = fresh_v1_database()
+    try:
+        _query(port, extra_name, admin, password,
+               "CREATE SCHEMA unexpected_application_schema")
+        try:
+            migrate_upstream_schema(extra_engine, roles, pgdata=pgdata,
+                                    instance_id=extra_id,
+                                    verify_maintenance=lambda: None, verify_backup=lambda: None)
+        except UpstreamMigrationError:
+            pass
+        else:
+            raise pg.SmokeFailure("migration accepted an unknown application schema")
+        if _query(port, extra_name, admin, password,
+                  "SELECT version FROM public.app_schema_version") != [(1,)]:
+            raise pg.SmokeFailure("unknown schema rejection changed version")
+    finally:
+        extra_engine.dispose()
+
+    # 在建表途中注入 SQL 错误，全部空表和版本变更必须回滚。
+    failed_name, failed_id, failed_engine = fresh_v1_database()
+    try:
+        from src.portable import upstream_migration
+        with mock.patch.object(upstream_migration, "CREATE_STATEMENTS",
+                               CREATE_STATEMENTS[:2] + ("INVALID INJECTED DDL",)):
+            try:
+                migrate_upstream_schema(failed_engine, roles, pgdata=pgdata,
+                                        instance_id=failed_id,
+                                        verify_maintenance=lambda: None, verify_backup=lambda: None)
+            except UpstreamMigrationError:
+                pass
+            else:
+                raise pg.SmokeFailure("injected migration failure was accepted")
+        if _query(port, failed_name, admin, password,
+                  "SELECT version FROM public.app_schema_version") != [(1,)]:
+            raise pg.SmokeFailure("failed migration changed version")
+        if _query(port, failed_name, admin, password,
+                  "SELECT to_regclass('public.result_hidden_items')") != [(None,)]:
+            raise pg.SmokeFailure("failed migration left new tables")
+    finally:
+        failed_engine.dispose()
+
+    # 两个管理员连接竞争同一版本；事务 advisory lock 只能放行一次建表。
+    race_name, race_id, race_engine = fresh_v1_database()
+    try:
+        barrier = threading.Barrier(2)
+        outcomes = []
+        def migrate_race():
+            barrier.wait(timeout=10)
+            try:
+                result = migrate_upstream_schema(race_engine, roles, pgdata=pgdata,
+                    instance_id=race_id, verify_maintenance=lambda: None,
+                    verify_backup=lambda: None)
+                outcomes.append(result.status)
+            except Exception as error:
+                outcomes.append(type(error).__name__)
+        workers = [threading.Thread(target=migrate_race) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=30)
+        if any(worker.is_alive() for worker in workers) or sorted(outcomes) != ["already_applied", "applied"]:
+            raise pg.SmokeFailure("concurrent v2 migrations did not serialize")
+        if _query(port, race_name, admin, password,
+                  "SELECT count(*) FROM public.app_schema_migrations") != [(1,)]:
+            raise pg.SmokeFailure("concurrent migration duplicated audit record")
+    finally:
+        race_engine.dispose()
+    fresh_database = _database_name()
+    fresh_app, fresh_probe = f"fresh_app_{secrets.token_hex(4)}", f"fresh_probe_{secrets.token_hex(4)}"
+    fresh_app_password, fresh_probe_password = _create_role_and_database(
+        port=port, admin=admin, password=password, app=fresh_app, probe=fresh_probe,
+        database=fresh_database, raw_secrets=raw_secrets,
+    )
+    fresh_engine = _admin_engine(port=port, database=fresh_database, user=admin, password=password)
+    try:
+        fresh_roles = schema.DatabaseRoles(admin, fresh_app, fresh_probe)
+        if schema.initialize_schema(fresh_engine, roles=fresh_roles, target_version=2) != 2:
+            raise pg.SmokeFailure("new database did not initialize schema v2")
+        with fresh_engine.begin() as connection:
+            connection.execute(schema.text('SET LOCAL search_path = pg_catalog, "public"'))
+            if public_schema_fingerprint(connection) != V2_FINGERPRINT:
+                raise pg.SmokeFailure("new schema v2 differs from migrated schema v2")
+        schema.configure_role_grants(fresh_engine, fresh_roles)
+        if _query(port, fresh_database, admin, password,
+                  "SELECT migration_id, checksum FROM public.app_schema_migrations") != [
+                      (MIGRATION_ID, MIGRATION_CHECKSUM)
+                  ]:
+            raise pg.SmokeFailure("new schema v2 migration audit differs")
+        if _query(port, fresh_database, fresh_app, fresh_app_password,
+                  "SELECT count(*) FROM public.price_observations") != [(0,)]:
+            raise pg.SmokeFailure("new schema v2 app role cannot read business tables")
+        if _query(port, fresh_database, fresh_probe, fresh_probe_password,
+                  "SELECT version FROM public.app_schema_version") != [(2,)]:
+            raise pg.SmokeFailure("new schema v2 probe cannot read version")
+    finally:
+        fresh_engine.dispose()
+    print(f"UPSTREAM_SCHEMA_FINGERPRINTS v1={v1_fingerprint} v2={v2_fingerprint}")
 
 def _check_real_sessions(port, database, app, app_password, root, raw_secrets):
     environment = {name: os.environ[name] for name in ("COMSPEC", "PATH", "SYSTEMROOT", "WINDIR") if name in os.environ}
@@ -507,7 +776,7 @@ def _schema_program_fixture(test_root):
         return program
     sources = (
         "portable_schema.py", "src/__init__.py", "src/version.py", "src/logging_config.py", "src/log_formatters.py", "src/log_retention.py", "src/account_policy.py",
-        "src/portable/__init__.py", "src/portable/schema.py", "src/portable/seeds.py", "src/portable/maintenance.py",
+        "src/portable/__init__.py", "src/portable/schema.py", "src/portable/schema_catalog.py", "src/portable/seeds.py", "src/portable/maintenance.py",
         "src/storage/__init__.py", "src/storage/models.py",
     )
     for relative in sources:
@@ -526,7 +795,7 @@ def _schema_program_fixture(test_root):
     return program
 
 
-def _check_provision(state, port, admin, password, runtime_root):
+def _check_provision(state, port, admin, password, runtime_root, export_fixture=None):
     from src.portable.provision import provision, ProvisionError
     identifier = str(uuid.uuid4())
     marker = state.data_root / ".aigoofish-cluster.json"
@@ -569,10 +838,92 @@ def _check_provision(state, port, admin, password, runtime_root):
     if _query(port, "aigoofish", admin, password, "SELECT version FROM public.app_schema_version") != [(1,)]:
         raise pg.SmokeFailure("rejected provision changed existing schema")
     from tests.portable_backup_pg_case import check_backup_roundtrip
-    check_backup_roundtrip(state, port, admin, password, identifier, runtime_root)
+    check_backup_roundtrip(state, port, admin, password, identifier, runtime_root,
+                           export_fixture=export_fixture)
 
 
-def run_smoke(postgres_root: Path | None = None, *, prompt_only: bool = False) -> dict[str, str]:
+def _check_v2_provision_and_backup(state, port, admin, password, runtime_root):
+    from src.portable.provision import provision
+    from tests.portable_backup_pg_case import check_backup_roundtrip
+
+    identifier = str(uuid.uuid4())
+    (state.data_root / ".aigoofish-cluster.json").write_text(json.dumps({
+        "format_version": 1, "instance_id": identifier,
+        "cluster_id": str(uuid.uuid4()), "engine_version": "17.11",
+    }), encoding="utf-8")
+    app_password, probe_password = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    state.raw_secrets.extend((app_password, probe_password))
+    environment = {
+        "GOOFISH_PORTABLE_ADMIN_DATABASE_URL": _dsn(port=port, database="postgres", user=admin, password=password),
+        "GOOFISH_PORTABLE_APP_DATABASE_PASSWORD": app_password,
+        "GOOFISH_PORTABLE_PROBE_DATABASE_PASSWORD": probe_password,
+    }
+    defaults = _schema_program_fixture(state.root) / "defaults"
+    result = provision(str(state.data_root), identifier, environ=environment,
+                       seed_root=defaults, schema_version=2)
+    if result["schema_version"] != 2:
+        raise pg.SmokeFailure("new instance did not provision schema v2")
+    _check_real_web(port, "aigoofish", "aigoofish_app", app_password,
+                    "aigoofish_probe", probe_password, state.root, state.raw_secrets)
+    owners = (str(uuid.uuid4()), str(uuid.uuid4()))
+    for index, owner in enumerate(owners):
+        _query(port, "aigoofish", admin, password,
+               "INSERT INTO public.users (id, username, password_hash, role, is_active) "
+               "VALUES (%s, %s, 'synthetic-fixture', 'operator', true)",
+               (owner, f"v2_owner_{index}"))
+        _query(port, "aigoofish", admin, password,
+               "INSERT INTO public.result_hidden_items (owner_id, item_id) VALUES (%s, %s)",
+               (owner, f"item_{index}"))
+    owner = owners[0]
+    task_ref = str(uuid.uuid4())
+    _query(port, "aigoofish", admin, password,
+           "INSERT INTO public.result_blacklist_rules "
+           "(id, owner_id, scope, task_ref, task_name_snapshot, kind, pattern) "
+           "VALUES (%s, %s, 'task', %s, 'fixture', 'keyword', 'synthetic')",
+           (str(uuid.uuid4()), owner, task_ref))
+    _query(port, "aigoofish", admin, password,
+           "INSERT INTO public.result_view_preferences (owner_id, page_key) VALUES (%s, 'results')",
+           (owner,))
+    _query(port, "aigoofish", admin, password,
+           "INSERT INTO public.price_observations "
+           "(id, owner_id, task_ref, task_name_snapshot, item_id, run_id, observed_at, "
+           "currency, raw_price, amount, source) "
+           "VALUES (%s, %s, %s, 'fixture', 'item_0', %s, now(), 'CNY', '10.00', 10.00, 'fixture')",
+           (str(uuid.uuid4()), owner, task_ref, str(uuid.uuid4())))
+    _query(port, "aigoofish", admin, password,
+           "INSERT INTO public.criteria_generation_jobs "
+           "(id, owner_id, task_ref, task_name_snapshot, input_digest, idempotency_key, status, stage) "
+           "VALUES (%s, %s, %s, 'fixture', %s, 'synthetic-job', 'succeeded', 'complete')",
+           (str(uuid.uuid4()), owner, task_ref, "a" * 64))
+    from src.storage.postgres_adapter import PostgresAdapter
+    storage = PostgresAdapter(_dsn(port=port, database="aigoofish",
+                                  user="aigoofish_app", password=app_password))
+    try:
+        for table in ("result_hidden_items", "result_blacklist_rules",
+                      "result_view_preferences", "price_observations",
+                      "criteria_generation_jobs"):
+            first = storage.list_upstream_records(table, owner_id=owners[0])
+            second = storage.list_upstream_records(table, owner_id=owners[1])
+            if len(first) != 1 or any(str(row["owner_id"]) != owners[0] for row in first):
+                raise pg.SmokeFailure("v2 application query did not isolate first owner")
+            if len(second) != (1 if table == "result_hidden_items" else 0) or any(
+                    str(row["owner_id"]) != owners[1] for row in second):
+                raise pg.SmokeFailure("v2 application query leaked another owner")
+        try:
+            storage.list_upstream_records("app_schema_migrations", owner_id=owners[0])
+        except ValueError:
+            pass
+        else:
+            raise pg.SmokeFailure("v2 application query accepted an audit table")
+    finally:
+        storage.engine.dispose()
+    check_backup_roundtrip(state, port, admin, password, identifier, runtime_root,
+                           schema_version=2, owners=owners)
+
+
+def run_smoke(postgres_root: Path | None = None, *, prompt_only: bool = False,
+              migration_only: bool = False, fingerprint_only: bool = False,
+              v2_backup_only: bool = False, export_v1_fixture: Path | None = None) -> dict[str, str]:
     lock = pg._load_lock()
     runtime_root = pg._runtime_root(lock, postgres_root)
     postgres, initdb, pg_ctl = (runtime_root / "bin" / name for name in ("postgres.exe", "initdb.exe", "pg_ctl.exe"))
@@ -611,14 +962,28 @@ def run_smoke(postgres_root: Path | None = None, *, prompt_only: bool = False) -
         state.postgres_start_attempted, state.postgres_port, state.postgres_start_epoch = True, port, __import__("time").time()
         pg._run_tool([pg_ctl, "start", "-D", state.data_root, "-l", state.pg_log, "-o", f"-p {port}", "-w", "-t", "30"], stage="schema-pg-start", diagnostic_root=diagnostics, timeout=45, direct_output=True)
         state.postgres_pid = pg._read_owned_postmaster_identity(state).pid
-        _check_provision(state, port, admin, password, runtime_root)
-        _run_schema_cases(
-            port=port, admin=admin, password=password, app=app, probe=probe,
-            raw_secrets=state.raw_secrets, test_root=state.root,
-            prompt_only=prompt_only,
-        )
+        if migration_only or fingerprint_only:
+            marker_id = str(uuid.uuid4())
+            (state.data_root / ".aigoofish-cluster.json").write_text(json.dumps({
+                "format_version": 1, "instance_id": marker_id,
+                "cluster_id": str(uuid.uuid4()), "engine_version": "17.11",
+            }), encoding="utf-8")
+            _check_v2_ddl_case(port=port, admin=admin, password=password, app=app,
+                               probe=probe, raw_secrets=state.raw_secrets,
+                               instance_id=marker_id, fingerprint_only=fingerprint_only)
+        elif v2_backup_only:
+            _check_v2_provision_and_backup(state, port, admin, password, runtime_root)
+        else:
+            _check_provision(state, port, admin, password, runtime_root, export_v1_fixture)
+            _run_schema_cases(
+                port=port, admin=admin, password=password, app=app, probe=probe,
+                raw_secrets=state.raw_secrets, test_root=state.root,
+                prompt_only=prompt_only,
+            )
         success = True
-        return {"postgres_version": str(lock["version"]), "schema_version": "1", "result": "PASS"}
+        scope = "v2-fingerprint" if fingerprint_only else "v2-migration" if migration_only else "v2-backup" if v2_backup_only else "full"
+        return {"postgres_version": str(lock["version"]), "schema_version": "2" if migration_only or v2_backup_only else "1",
+                "result": "PASS", "scope": scope}
     finally:
         clean = True
         if state is not None:
@@ -642,9 +1007,21 @@ def run_smoke(postgres_root: Path | None = None, *, prompt_only: bool = False) -
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run isolated portable schema PostgreSQL smoke")
     parser.add_argument("--postgres-root", type=Path)
+    parser.add_argument("--migration-only", action="store_true", help="check v2 migration in an isolated database")
+    parser.add_argument("--fingerprint-only", action="store_true", help="measure v1/v2 structures in a rolled-back isolated database")
+    parser.add_argument("--v2-backup-only", action="store_true", help="check new schema v2 encrypted backup and isolated restore")
+    parser.add_argument("--export-v1-fixture", type=Path,
+                        help="retain a verified synthetic v1 archive and protected passphrase for Launcher E2E")
     arguments = parser.parse_args(argv)
     try:
-        result = run_smoke(arguments.postgres_root)
+        if sum((arguments.migration_only, arguments.fingerprint_only, arguments.v2_backup_only)) > 1:
+            raise ValueError("choose one isolated test scope")
+        if arguments.export_v1_fixture and (arguments.migration_only or arguments.fingerprint_only or arguments.v2_backup_only):
+            raise ValueError("v1 export requires the full isolated scope")
+        result = run_smoke(arguments.postgres_root, migration_only=arguments.migration_only,
+                           fingerprint_only=arguments.fingerprint_only,
+                           v2_backup_only=arguments.v2_backup_only,
+                           export_v1_fixture=arguments.export_v1_fixture)
     except Exception as exc:
         print(f"PORTABLE_SCHEMA_PG_SMOKE=FAILED stage={type(exc).__name__}", file=sys.stderr)
         return 1

@@ -13,6 +13,10 @@ if (args.Length == 1 && args[0] == "--real-stack")
 {
     return await RealPortableStack.RunAsync();
 }
+if (args.Length == 3 && args[0] == "--schema-upgrade-e2e")
+{
+    return await SchemaUpgradeAcceptance.RunAsync(args[1], args[2]);
+}
 if (args.Length == 1 && args[0] == "--http-contracts")
 {
     return await HttpFaultCases.RunAsync();

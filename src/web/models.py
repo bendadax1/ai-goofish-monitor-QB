@@ -40,6 +40,7 @@ def _normalize_price_sort_order(
 
 class Task(BaseModel):
     task_name: str
+    stable_task_id: Optional[str] = None
     order: Optional[int] = None
     enabled: bool
     keyword: str

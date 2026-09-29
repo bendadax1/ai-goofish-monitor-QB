@@ -4,8 +4,8 @@
 ``.env``、不扫描用户目录、不导入业务配置或存储适配器，也不执行
 抓取、AI 或通知。
 
-P1 只定义初始版本 1；已有 schema 的升级属于后续迁移体系，不能用
-``create_all`` 代替。
+默认仍初始化版本 1。版本 2 的全新空库初始化必须显式选择；已有
+schema 的升级只能走独立迁移器，不能用 ``create_all`` 代替。
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from sqlalchemy.pool import NullPool
 from src.account_policy import validate_new_password, validate_username
 
 from src.portable.maintenance import validate_database_target
+from src.portable.schema_catalog import V1_TABLE_COLUMNS
 from src.portable.seeds import (
     PortableSeedError,
     apply_system_seeds,
@@ -115,7 +116,9 @@ def _quoted_identifier(value: str) -> str:
 
 
 def _application_table_names() -> tuple[str, ...]:
-    return tuple(sorted(table.name for table in Base.metadata.sorted_tables))
+    """v1 固定表清单；新增 ORM 模型不得改变已发行版本的指纹。"""
+
+    return tuple(sorted(V1_TABLE_COLUMNS))
 
 
 def _portable_metadata() -> MetaData:
@@ -128,8 +131,8 @@ def _portable_metadata() -> MetaData:
     """
 
     metadata = MetaData(schema=SCHEMA_NAME)
-    for table in Base.metadata.sorted_tables:
-        table.to_metadata(metadata, schema=SCHEMA_NAME)
+    for table_name in _application_table_names():
+        Base.metadata.tables[table_name].to_metadata(metadata, schema=SCHEMA_NAME)
     return metadata
 
 
@@ -404,13 +407,16 @@ def initialize_schema(
     *,
     roles: DatabaseRoles | None = None,
     seed_root: os.PathLike[str] | str | None = None,
+    target_version: int = 1,
 ) -> int:
-    """在单个事务中建立空 public schema 的 P1 版本 1 基线。
+    """在单个事务中建立空 public schema 的指定版本基线。
 
     ``app_schema_version`` 在所有 ORM 表之后创建并写入。任何异常由
     ``Engine.begin()`` 回滚；已有或不兼容数据库不执行 ``create_all``。
     """
 
+    if target_version not in (1, 2):
+        raise PortableSchemaError("portable schema target version is unsupported")
     try:
         bundle = load_seed_bundle(Path(seed_root)) if seed_root is not None else None
     except PortableSeedError:
@@ -421,10 +427,11 @@ def initialize_schema(
             _acquire_schema_lock(connection)
             _assert_empty_public_schema(connection)
             _portable_metadata().create_all(bind=connection, checkfirst=False)
+            version_constraint = "version = 1" if target_version == 1 else "version IN (1, 2)"
             connection.execute(
                 text(
                     f'CREATE TABLE "{SCHEMA_NAME}"."{VERSION_TABLE_NAME}" '
-                    "(version integer PRIMARY KEY CHECK (version = 1))"
+                    f"(version integer PRIMARY KEY CHECK ({version_constraint}))"
                 )
             )
             connection.execute(
@@ -432,13 +439,36 @@ def initialize_schema(
                     f'INSERT INTO "{SCHEMA_NAME}"."{VERSION_TABLE_NAME}" (version) '
                     "VALUES (:version)"
                 ),
-                {"version": SCHEMA_VERSION},
+                {"version": target_version},
             )
+            if target_version == 2:
+                from src.portable.upstream_ddl import CREATE_STATEMENTS, MIGRATION_CHECKSUM, MIGRATION_ID, ddl_checksum
+
+                if ddl_checksum() != MIGRATION_CHECKSUM:
+                    raise PortableSchemaError("portable schema v2 DDL checksum differs")
+
+                for statement in CREATE_STATEMENTS:
+                    connection.execute(text(statement))
+                connection.execute(text(
+                    "INSERT INTO public.app_schema_migrations (migration_id, checksum) "
+                    "VALUES (:migration_id, :checksum)"
+                ), {"migration_id": MIGRATION_ID, "checksum": MIGRATION_CHECKSUM})
             if bundle is not None:
                 apply_system_seeds(connection, bundle)
             if roles is not None:
                 _apply_role_grants(connection, roles)
-        return SCHEMA_VERSION
+                if target_version == 2:
+                    from src.portable.upstream_migration import _grant_v2_tables, _assert_v2_grants
+
+                    _grant_v2_tables(connection, roles)
+                    _assert_v2_grants(connection, roles)
+            if target_version == 2:
+                from src.portable.schema_catalog import V2_FINGERPRINT
+                from src.portable.schema_fingerprint import public_schema_fingerprint
+
+                if public_schema_fingerprint(connection) != V2_FINGERPRINT:
+                    raise PortableSchemaError("portable schema v2 structure differs")
+        return target_version
     except PortableSchemaError:
         raise
     except Exception:
@@ -456,8 +486,13 @@ def configure_role_grants(engine: Engine, roles: DatabaseRoles) -> None:
         with engine.begin() as connection:
             connection.execute(text(f'SET LOCAL search_path = pg_catalog, "{SCHEMA_NAME}"'))
             _acquire_schema_lock(connection)
-            _assert_compatible_schema(connection)
+            version = _assert_compatible_schema(connection)
             _apply_role_grants(connection, roles)
+            if version == 2:
+                from src.portable.upstream_migration import _grant_v2_tables, _assert_v2_grants
+
+                _grant_v2_tables(connection, roles)
+                _assert_v2_grants(connection, roles)
     except PortableSchemaError:
         raise
     except Exception:
@@ -468,7 +503,7 @@ def configure_role_grants(engine: Engine, roles: DatabaseRoles) -> None:
         raise RoleGrantError("portable database role configuration failed") from None
 
 
-def _assert_compatible_schema(connection: Connection) -> None:
+def _assert_compatible_schema(connection: Connection) -> int:
     relation = connection.execute(
         text("SELECT to_regclass(:qualified_name)"),
         {"qualified_name": f"{SCHEMA_NAME}.{VERSION_TABLE_NAME}"},
@@ -481,8 +516,9 @@ def _assert_compatible_schema(connection: Connection) -> None:
         raise SchemaInvalidError("schema version table is invalid") from None
     if len(rows) != 1 or isinstance(rows[0], bool) or not isinstance(rows[0], int) or rows[0] <= 0:
         raise SchemaInvalidError("schema version table must contain exactly one positive integer")
-    if rows[0] != SCHEMA_VERSION:
+    if rows[0] not in (1, 2):
         raise SchemaIncompatibleError("schema version is incompatible")
+    return rows[0]
 
 
 def _validate_first_admin(username: str, password: str) -> tuple[str, str]:

@@ -77,6 +77,7 @@ def run() -> int:
             "instance_id": result.instance_id,
             "source_instance_id": result.source_instance_id,
             "archive_sha256": result.archive_sha256,
+            "schema_version": result.schema_version,
             "tables": result.table_counts,
             "files": result.file_count,
             "revoked_sessions": result.revoked_sessions,

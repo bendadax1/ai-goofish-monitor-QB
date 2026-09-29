@@ -964,6 +964,31 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void OnSchemaUpgradeClick(object? sender, RoutedEventArgs e)
+    {
+        if (!_viewModel.CanUpgradeSchema) return;
+        try
+        {
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "选择升级前加密备份文件夹（必须位于数据目录之外）",
+                AllowMultiple = false,
+            });
+            var folderUri = folders.FirstOrDefault()?.Path;
+            if (folderUri is null || !folderUri.IsFile) return;
+            var dialog = new BackupPassphraseDialog(forSchemaUpgrade: true);
+            var passphrase = await dialog.ShowDialog<string?>(this);
+            if (passphrase is null) return;
+            try { await _viewModel.UpgradeSchemaAsync(folderUri.LocalPath, passphrase); }
+            finally { passphrase = string.Empty; }
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError($"schema 升级 UI 操作失败；异常类型：{exception.GetType().Name}");
+            _viewModel.ReportBackupUiFailure();
+        }
+    }
+
     private async void OnBusinessRestoreClick(object? sender, RoutedEventArgs e)
     {
         if (!_viewModel.CanRestoreBusinessBackup) return;

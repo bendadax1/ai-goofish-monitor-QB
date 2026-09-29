@@ -4,6 +4,9 @@ import ast
 import asyncio
 import copy
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 from types import SimpleNamespace
 from typing import Optional
 import unittest
@@ -166,6 +169,7 @@ class NotificationTestApiTests(unittest.TestCase):
             "TestProductNotificationRequest": TestProductNotificationRequest,
             "CHANNEL_NAME_MAP": {"ntfy": "Ntfy"},
             "send_test_once": send_test_once,
+            "_state_root": lambda: None,
             "NotificationTestConflict": NotificationTestConflict,
             "NotificationTestBusy": NotificationTestBusy,
             "NotificationTestFailed": NotificationTestFailed,
@@ -266,6 +270,78 @@ class NotificationTestConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await send_test_once(**kwargs))
             self.assertTrue(await send_test_once(**kwargs))
         self.assertEqual(calls, 2)
+
+    async def test_durable_claim_survives_process_cache_reset(self):
+        calls = 0
+        async def sender():
+            nonlocal calls
+            calls += 1
+            return True
+        with tempfile.TemporaryDirectory(dir=ROOT / ".tmp/tests") as directory:
+            root = Path(directory) / "state" / "notification-tests"
+            kwargs = {"owner_id": "durable-owner", "request_id": "durable-restart",
+                      "test_type": "standard", "channel": "ntfy", "config_id": "cfg",
+                      "bound_task": None, "sender": sender, "durable_root": root}
+            self.assertTrue(await send_test_once(**kwargs))
+            notification_test_guard._RESULTS.pop(("user:durable-owner", "durable-restart"))
+            self.assertTrue(await send_test_once(**kwargs))
+            self.assertEqual(calls, 1)
+
+    async def test_durable_pending_claim_fails_closed_after_restart(self):
+        calls = 0
+        async def sender():
+            nonlocal calls
+            calls += 1
+            return True
+        with tempfile.TemporaryDirectory(dir=ROOT / ".tmp/tests") as directory:
+            root = Path(directory) / "state" / "notification-tests"
+            key = ("user:durable-other", "durable-pending")
+            fingerprint = notification_test_guard.hashlib.sha256(
+                b'["standard","ntfy","cfg",""]').hexdigest()
+            self.assertEqual(notification_test_guard._ledger_transition(root, key, fingerprint),
+                             ("claimed", None))
+            with mock.patch.object(notification_test_guard, "_TTL_SECONDS", 0):
+                self.assertEqual(notification_test_guard._ledger_transition(root, key, fingerprint),
+                                 ("pending", None))
+            with self.assertRaises(NotificationTestFailed):
+                await send_test_once(owner_id="durable-other", request_id="durable-pending",
+                                     test_type="standard", channel="ntfy", config_id="cfg",
+                                     bound_task=None, sender=sender, durable_root=root)
+            self.assertEqual(calls, 0)
+            with self.assertRaises(NotificationTestConflict):
+                notification_test_guard._ledger_transition(root, key, "0" * 64)
+
+    async def test_corrupt_durable_ledger_never_sends(self):
+        calls = 0
+        async def sender():
+            nonlocal calls
+            calls += 1
+            return True
+        with tempfile.TemporaryDirectory(dir=ROOT / ".tmp/tests") as directory:
+            root = Path(directory) / "state" / "notification-tests"
+            root.mkdir(parents=True)
+            (root / "requests-v1.json").write_text("{broken", encoding="utf-8")
+            with self.assertRaises(NotificationTestFailed):
+                await send_test_once(owner_id="durable-corrupt", request_id="durable-corrupt",
+                                     test_type="standard", channel="ntfy", config_id=None,
+                                     bound_task=None, sender=sender, durable_root=root)
+            self.assertEqual(calls, 0)
+
+    async def test_claim_from_another_process_prevents_resend(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / ".tmp/tests") as directory:
+            root = Path(directory) / "state" / "notification-tests"
+            child = subprocess.run([
+                sys.executable, "-B", "-c",
+                "import pathlib,sys; from src.web.notification_test_guard import _ledger_transition; "
+                "print(_ledger_transition(pathlib.Path(sys.argv[1]), ('user:process-owner','same-click'), sys.argv[2]))",
+                str(root), "a" * 64,
+            ], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=20)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            self.assertIn("claimed", child.stdout)
+            self.assertEqual(notification_test_guard._ledger_transition(
+                root, ("user:process-owner", "same-click"), "a" * 64), ("pending", None))
+            self.assertEqual(notification_test_guard._ledger_transition(
+                root, ("user:other-owner", "same-click"), "a" * 64), ("claimed", None))
 
 
 if __name__ == "__main__":

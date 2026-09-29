@@ -654,6 +654,7 @@ public sealed class RealPortableStackHost : IAsyncDisposable
     }
 
     public bool SetupRequired => _python.LastReadiness?.SetupRequired is true;
+    public int? CurrentSchemaVersion => _python.LastReadiness?.SchemaVersion;
 
     /// <summary>
     /// Creates an in-memory user-client context only after the Python component
@@ -1170,41 +1171,101 @@ public sealed class RealPortableStackHost : IAsyncDisposable
         }
         try
         {
-            _lease.EnsureHeld();
-            PortableBusinessBackupRunner.ValidateDestination(DataRoot, destination);
-            if (string.IsNullOrEmpty(passphrase) || Encoding.UTF8.GetByteCount(passphrase) is < 12 or > 1024)
-            {
-                throw new InvalidOperationException("备份口令必须包含 12 到 1024 个 UTF-8 字节。");
-            }
-            var identity = _postgres.ProcessSnapshot.Identity
-                ?? throw new InvalidOperationException("PostgreSQL 未持有可核验的进程身份。");
-            var secrets = new WindowsInstanceSecretsStore().Load(_lease);
-
-            async Task VerifyQuiesced(CancellationToken token)
-            {
-                _lease.EnsureHeld();
-                _provision.VerifyCompletedForRecovery();
-                if (await _python.GetStateAsync(token).ConfigureAwait(false) is not ComponentRuntimeState.Stopped ||
-                    !await _provision.IsQuiescentAsync(token).ConfigureAwait(false) ||
-                    !await _postgres.IsInitializationQuiescentAsync(token).ConfigureAwait(false) ||
-                    await _postgres.GetStateAsync(token).ConfigureAwait(false) is not ComponentRuntimeState.Running ||
-                    _postgres.ProcessSnapshot.Identity != identity ||
-                    await _postgres.CheckTransportAsync(token).ConfigureAwait(false) is not PostgresTransportState.AcceptingConnections)
-                {
-                    throw new InvalidOperationException("实例锁、停写状态或数据库归属复核失败，拒绝发布备份。");
-                }
-            }
-
-            return await _coordinator.RunQuiescedBackupAndStopAsync(
-                "postgres", "python-web",
-                token => PortableBusinessBackupRunner.RunAsync(
-                Bundle, _lease, secrets, _postgresPort, destination, passphrase, VerifyQuiesced, token),
-                cancellationToken).ConfigureAwait(false);
+            return await CreateBusinessBackupAndStopCoreAsync(destination, passphrase, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
             _recoveryGate.Release();
         }
+    }
+
+    private async Task<PortableBusinessBackupResult> CreateBusinessBackupAndStopCoreAsync(
+        string destination, string passphrase, CancellationToken cancellationToken)
+    {
+        _lease.EnsureHeld();
+        PortableBusinessBackupRunner.ValidateDestination(DataRoot, destination);
+        if (string.IsNullOrEmpty(passphrase) || Encoding.UTF8.GetByteCount(passphrase) is < 12 or > 1024)
+            throw new InvalidOperationException("备份口令必须包含 12 到 1024 个 UTF-8 字节。");
+        var identity = _postgres.ProcessSnapshot.Identity
+            ?? throw new InvalidOperationException("PostgreSQL 未持有可核验的进程身份。");
+        var secrets = new WindowsInstanceSecretsStore().Load(_lease);
+
+        async Task VerifyQuiesced(CancellationToken token)
+        {
+            _lease.EnsureHeld();
+            _provision.VerifyCompletedForRecovery();
+            if (await _python.GetStateAsync(token).ConfigureAwait(false) is not ComponentRuntimeState.Stopped ||
+                !await _provision.IsQuiescentAsync(token).ConfigureAwait(false) ||
+                !await _postgres.IsInitializationQuiescentAsync(token).ConfigureAwait(false) ||
+                await _postgres.GetStateAsync(token).ConfigureAwait(false) is not ComponentRuntimeState.Running ||
+                _postgres.ProcessSnapshot.Identity != identity ||
+                await _postgres.CheckTransportAsync(token).ConfigureAwait(false) is not PostgresTransportState.AcceptingConnections)
+                throw new InvalidOperationException("实例锁、停写状态或数据库归属复核失败，拒绝发布备份。");
+        }
+
+        return await _coordinator.RunQuiescedBackupAndStopAsync(
+            "postgres", "python-web",
+            token => PortableBusinessBackupRunner.RunAsync(
+                Bundle, _lease, secrets, _postgresPort, destination, passphrase, VerifyQuiesced, token),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>用户显式触发：备份并停机，在同一实例租约内单独启动 PG 执行 002。</summary>
+    public async Task<PortableSchemaUpgradeResult> UpgradeSchemaWithBackupAndStopAsync(
+        string destination, string passphrase, CancellationToken cancellationToken = default)
+    {
+        if (!await _recoveryGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("已有实例恢复、备份或升级操作正在进行。");
+        try
+        {
+            var backup = await CreateBusinessBackupAndStopCoreAsync(destination, passphrase, cancellationToken)
+                .ConfigureAwait(false);
+            var migrated = await _coordinator.RunMaintenanceAsync(async _ =>
+            {
+                _lease.EnsureHeld();
+                _provision.VerifyCompletedForRecovery();
+                if (await _python.GetStateAsync(cancellationToken).ConfigureAwait(false) is not ComponentRuntimeState.Stopped)
+                    throw new InvalidOperationException("Web 未确认停止，拒绝升级。");
+                try
+                {
+                    // StartAsync may already own a postmaster when readiness fails. Keep
+                    // the entire start inside the stop/failure boundary.
+                    await _postgres.StartAsync(cancellationToken).ConfigureAwait(false);
+                    var identity = _postgres.ProcessSnapshot.Identity
+                        ?? throw new InvalidOperationException("升级数据库缺少受管进程身份。");
+                    async Task VerifyQuiesced(CancellationToken token)
+                    {
+                        _lease.EnsureHeld();
+                        _provision.VerifyCompletedForRecovery();
+                        if (await _python.GetStateAsync(token).ConfigureAwait(false) is not ComponentRuntimeState.Stopped ||
+                            !await _provision.IsQuiescentAsync(token).ConfigureAwait(false) ||
+                            !await _postgres.IsInitializationQuiescentAsync(token).ConfigureAwait(false) ||
+                            await _postgres.GetStateAsync(token).ConfigureAwait(false) is not ComponentRuntimeState.Running ||
+                            _postgres.ProcessSnapshot.Identity != identity ||
+                            await _postgres.CheckTransportAsync(token).ConfigureAwait(false) is not PostgresTransportState.AcceptingConnections)
+                            throw new InvalidOperationException("升级维护窗口或数据库身份发生变化。");
+                    }
+                    await VerifyQuiesced(cancellationToken).ConfigureAwait(false);
+                    var secrets = new WindowsInstanceSecretsStore().Load(_lease);
+                    return await PortableSchemaMigrationRunner.RunAsync(
+                        Bundle, _lease, secrets, _postgresPort, backup, VerifyQuiesced, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    // Do not release the instance lease when ownership becomes unknown:
+                    // DisposeAsync checks all component states before releasing it.
+                    var state = await _postgres.GetStateAsync(CancellationToken.None).ConfigureAwait(false);
+                    if (state is ComponentRuntimeState.Running or ComponentRuntimeState.Starting)
+                        await _postgres.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                    else if (state is not ComponentRuntimeState.Stopped)
+                        throw new InvalidOperationException("升级数据库停止状态无法核验；保留实例锁，禁止继续启动。");
+                }
+            }, cancellationToken).ConfigureAwait(false);
+            return new PortableSchemaUpgradeResult(backup, migrated.Version, migrated.Status);
+        }
+        finally { _recoveryGate.Release(); }
     }
 
     private static RealPortableStackHost CreateCore(

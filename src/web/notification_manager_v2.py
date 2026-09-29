@@ -11,6 +11,7 @@ from src.web.notification_test_guard import (
     NotificationTestBusy,
     NotificationTestConflict,
     NotificationTestFailed,
+    _state_root,
     send_test_once,
 )
 from src.web.auth import check_permission, has_category, is_multi_user_mode, require_auth
@@ -115,6 +116,7 @@ async def send_test_notification_api(
                 bound_task=request.bound_task or request.bound_account,
                 config_id=request.config_id,
             ),
+            durable_root=_state_root(),
         )
         if result:
             return {"message": f"测试通知已成功发送到 {channel_display_name} 渠道。", "success": True}
@@ -157,6 +159,7 @@ async def send_test_task_completion_notification_api(
                 bound_task=request.bound_task or request.bound_account,
                 config_id=request.config_id,
             ),
+            durable_root=_state_root(),
         )
         if result:
             return {"message": f"任务完成测试通知已成功发送到 {channel_display_name} 渠道。", "success": True}
@@ -199,6 +202,7 @@ async def send_test_product_notification_api(
                 bound_task=request.bound_task or request.bound_account,
                 config_id=request.config_id,
             ),
+            durable_root=_state_root(),
         )
         if result:
             return {"message": f"商品卡测试通知已成功发送到 {channel_display_name} 渠道。", "success": True}

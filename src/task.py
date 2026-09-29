@@ -1,14 +1,19 @@
+import asyncio
 import json
+import uuid
+from pathlib import Path
 
 from pydantic import BaseModel
 from typing import Optional
 
 from src.config import CONFIG_FILE
 from src.file_operator import FileOperator
+from src.storage.upstream_local import mutate_local_task_config
 
 
 class Task(BaseModel):
     task_name: str
+    stable_task_id: Optional[str] = None
     order: Optional[int] = None
     enabled: bool
     keyword: str
@@ -71,78 +76,56 @@ async def add_task(task: Task) -> bool:
     """
     向配置文件中添加一个新任务。
     """
-    config_file_op = FileOperator(CONFIG_FILE)
+    def transform(config_data: list[dict]) -> tuple[tuple[str, int, str], bool]:
+        import re
 
-    config_data_str = await config_file_op.read()
-    config_data = json.loads(config_data_str) if config_data_str else []
-    
-    # 确保任务名称唯一，使用自动递增的副本计数
-    original_name = task.task_name
-    base_name = original_name
-    copy_count = 0
-    
-    # 如果原始名称已经以"(副本)"或"(副本n)"结尾，提取基础名称和副本计数
-    import re
-    # 匹配中文格式：原名称 (副本) 或 原名称 (副本n)
-    match = re.match(r'^(.+?)(?:\s+\((副本)(\d+)?\))?$', original_name)
-    if match:
-        base_name = match.group(1)
-        if match.group(3):  # 如果已有数字后缀
-            copy_count = int(match.group(3))
-        elif match.group(2):  # 如果只有"副本"没有数字
-            copy_count = 1
-    
-    # 检查是否有 existing task names
-    while True:
-        # 格式化任务名称 - 始终使用中文 "(副本n)" 格式
-        if copy_count == 0:
-            current_name = original_name
-        else:
-            current_name = f"{base_name} (副本{copy_count})"
-        
-        # 检查名称是否存在
-        exists = any(existing_task['task_name'] == current_name for existing_task in config_data)
-        if not exists:
-            # 更新任务名称
-            task.task_name = current_name
-            break
-        
-        # 递增副本计数并再次尝试
-        copy_count += 1
-    
-    # Convert to dictionary before appending to ensure JSON serializability
-    if task.order is None:
-        task.order = len(config_data)
-    config_data.append(task.model_dump())
+        original_name = task.task_name
+        base_name = original_name
+        copy_count = 0
+        match = re.match(r'^(.+?)(?:\s+\((副本)(\d+)?\))?$', original_name)
+        if match:
+            base_name = match.group(1)
+            if match.group(3):
+                copy_count = int(match.group(3))
+            elif match.group(2):
+                copy_count = 1
+        while True:
+            current_name = (original_name if copy_count == 0 else
+                            f"{base_name} (副本{copy_count})")
+            if not any(existing['task_name'] == current_name for existing in config_data):
+                break
+            copy_count += 1
+        order = len(config_data) if task.order is None else task.order
+        identity = str(uuid.uuid4())
+        created = task.model_dump()
+        created.update(task_name=current_name, order=order, stable_task_id=identity)
+        config_data.append(created)
+        return (current_name, order, identity), True
 
-    return await config_file_op.write(json.dumps(config_data, ensure_ascii=False, indent=2))
+    name, order, identity = await asyncio.to_thread(
+        mutate_local_task_config, Path(CONFIG_FILE), transform, create_if_missing=True)
+    task.task_name, task.order, task.stable_task_id = name, order, identity
+    return True
 
 
 async def update_task(task_id: int, task: Task | dict) -> bool:
     """
     更新配置文件中指定ID的任务。
     """
-    config_file_op = FileOperator(CONFIG_FILE)
+    def transform(config_data: list[dict]) -> tuple[bool, bool]:
+        if not 0 <= task_id < len(config_data):
+            return False, False
+        stable_task_id = config_data[task_id].get("stable_task_id")
+        payload = task.model_dump() if hasattr(task, 'model_dump') else dict(task)
+        if stable_task_id is None:
+            payload.pop("stable_task_id", None)
+        else:
+            payload["stable_task_id"] = stable_task_id
+        config_data[task_id] = payload
+        return True, True
 
-    config_data_str = await config_file_op.read()
-
-    if not config_data_str:
-        return False
-
-    config_data = json.loads(config_data_str)
-
-    if len(config_data) <= task_id:
-        return False
-
-    # Check if task is a Task object or dict
-    if hasattr(task, 'model_dump'):
-        # Task object
-        config_data[task_id] = task.model_dump()
-    else:
-        # Dict
-        config_data[task_id] = task
-
-    return await config_file_op.write(json.dumps(config_data, ensure_ascii=False, indent=2))
+    return await asyncio.to_thread(mutate_local_task_config, Path(CONFIG_FILE),
+                                   transform, create_if_missing=True)
 
 
 async def get_task(task_id: int) -> Task | None:
@@ -182,16 +165,11 @@ async def remove_task(task_id: int) -> bool:
     """
     从配置文件中删除指定ID的任务。
     """
-    config_file_op = FileOperator(CONFIG_FILE)
-    config_data_str = await config_file_op.read()
-    if not config_data_str:
-        return True
+    def transform(config_data: list[dict]) -> tuple[bool, bool]:
+        if not 0 <= task_id < len(config_data):
+            return True, False
+        config_data.pop(task_id)
+        return True, True
 
-    config_data = json.loads(config_data_str)
-
-    if len(config_data) <= task_id:
-        return True
-
-    config_data.pop(task_id)
-
-    return await config_file_op.write(json.dumps(config_data, ensure_ascii=False, indent=2))
+    return await asyncio.to_thread(mutate_local_task_config, Path(CONFIG_FILE),
+                                   transform, create_if_missing=True)
