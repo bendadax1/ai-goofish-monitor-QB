@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 import unittest
+
+from tests._ci_guard import needs_postgres
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -50,6 +52,7 @@ class _FakeStorage:
         return dict(self.default_ai_config) if self.default_ai_config is not None else None
 
 
+@needs_postgres
 class PortableLauncherAiManualTestRouteTests(unittest.TestCase):
     instance_id = "instance-a"
     token = "l1." + ("T" * 43)

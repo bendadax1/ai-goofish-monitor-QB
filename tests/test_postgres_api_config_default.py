@@ -6,6 +6,7 @@ import unittest
 import uuid
 from unittest import mock
 
+from tests._ci_guard import needs_postgres
 from src.storage import postgres_adapter
 from src.storage.models import UserApiConfig
 
@@ -32,6 +33,7 @@ class _Query:
         return self.first_row
 
 
+@needs_postgres
 class PortablePostgresDefaultConfigTests(unittest.TestCase):
     def _save(self, *, portable, defaults, existing=None, payload=None):
         adapter = postgres_adapter.PostgresAdapter.__new__(postgres_adapter.PostgresAdapter)

@@ -4,6 +4,8 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import unittest
+
+from tests._ci_guard import needs_postgres
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -70,6 +72,7 @@ class _FakeStorage:
         return deepcopy(self.configs.get(user_id))
 
 
+@needs_postgres
 class PortableLauncherAiHealthCacheTests(unittest.TestCase):
     instance_id = "instance-a"
     token = "l1." + ("H" * 43)

@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import unittest
+
+from tests._ci_guard import needs_windows
 from unittest.mock import patch, AsyncMock
 from fastapi import HTTPException
 from fastapi import FastAPI
@@ -56,6 +58,7 @@ class FakeStorage:
         return False
 
 
+@needs_windows
 class LauncherPairingRegistryTests(unittest.TestCase):
     def setUp(self):
         self.registry = LauncherPairingRegistry()

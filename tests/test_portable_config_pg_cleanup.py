@@ -7,6 +7,8 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
+from tests._ci_guard import needs_postgres
+
 
 def _load_probe_module():
     probe_path = Path(__file__).resolve(strict=True).with_name("portable_config_pg_case.py")
@@ -21,6 +23,7 @@ def _load_probe_module():
 probe = _load_probe_module()
 
 
+@needs_postgres
 class PortableConfigProbeCleanupTests(unittest.TestCase):
     def test_database_identity_query_normalizes_inet_without_relaxing_loopback_check(self):
         probe_source = Path(probe.__file__).read_text(encoding="utf-8")
