@@ -15,14 +15,18 @@
 - [ ] **为 CI 增加 PostgreSQL service job**：当前 CI 跳过全部需要真实 PG 的用例
       （`tests/portable_*_pg_*.py` 等）。用 `services: postgres:16` + `DATABASE_URL` 复跑这一批，
       并在 `tests/_ci_guard.needs_postgres` 断言上生效。
-- [ ] **锁定 `requirements.txt` 版本**：落实 `PORTABLE_LAUNCHER_PLAN.md` 决策 D07（版本锁定依赖）。
-      便携链路已有 `scripts/portable/requirements-python.lock.txt`，CI 现按
-      `scripts/portable/requirements-python.in` 安装以复现受支持组合；但仓库根
-      `requirements.txt` 仍未锁，会解析到 `openai 3.x + httpx2`，与
-      `src/httpx_compat.py`（适配 `httpx 0.28.1` 私有扩展点）不兼容。
-      **用户已决定（2026-10-02）：升级 `httpx_compat` 适配 `httpx2`**，不锁回 `openai 2.x`。
-      需改 `_get_proxy_map` / `_transport_for_url` 私有扩展点，并重跑
-      `tests/test_upstream_httpx_compat.py` 的路由与 SDK 默认值回归。
+- [x] ~~**锁定 `requirements.txt` 版本 / 适配 `httpx2`**~~ **已完成**（2026-10-02，`dd600b0`）。
+      按用户决定升级 `httpx_compat` 兼容两代 HTTPX，而非锁回 `openai 2.x`：
+      - `src/httpx_compat.py` 新增兼容导入层，按 **openai 的实际依赖元数据**
+        决定用 `httpx` 还是 `httpx2`（两者可能共存，例如被其他依赖间接引入）。
+        选错库会让混入的客户端与 SDK 内部客户端不是同一库，patch 静默失效。
+      - `_parse_no_proxy_network` 兼容两代 pattern：`all://[2001:db8::/32]`（httpx）
+        与 `all://[2001:db8::]/32`（httpx2）。
+      - `src/config.py`、`src/prompt_utils.py`、`src/web/ai_health.py` 改用兼容导入。
+      - 验证：同一套用例在 **openai 2.14.0 + httpx 0.28.1** 与
+        **openai 3.22.1 + httpx2 2.13.1（并混入 0.28.1 覆盖共存）** 下各跑一遍，
+        均 491 passed / 6 skipped / 0 failed。
+      **仍待做**：根 `requirements.txt` 的精确版本锁定本身（D07），本次只解决兼容性。
 - [ ] **`ai_handler.py` 编码修复已改，需回归**：原先 `sys.stdout.detach()` 在导入期销毁宿主
       流对象（pytest / Launcher 均受影响），已改为就地 `reconfigure(encoding="utf-8")`。
       **部分已验（2026-10-02）**：`python web_server.py` 直接运行与 CI 用例均正常，
