@@ -199,22 +199,15 @@ def _is_ai_recommended(ai_analysis: Optional[Dict[str, Any]]) -> bool:
 
 
 def _default_context_options() -> dict:
-    return {
-        "user_agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-        "viewport": {"width": 412, "height": 915},
-        "device_scale_factor": 2.625,
-        "is_mobile": True,
-        "has_touch": True,
-        "locale": "zh-CN",
-        "timezone_id": "Asia/Shanghai",
-        "permissions": ["geolocation"],
-        "geolocation": {"longitude": 121.4737, "latitude": 31.2304},
-        "color_scheme": "light",
-    }
+    """抓取默认上下文。
 
+    与 login.py 保持一致，统一使用桌面身份：账号快照由桌面浏览器采集，
+    抓取再用桌面上下文可避免跨身份触发闲鱼「快速进入」确认页。
+    历史上这里使用移动端（Android UA）身份，现已统一。
 
-def _default_desktop_context_options() -> dict:
-    """桌面上下文兜底：当移动端命中完整登录页时使用。"""
+    注意：`_build_mobile_first_context_overrides` 等按快照覆盖设备的逻辑
+    仍然保留，当快照自身声明为移动端时会被覆盖回移动端。
+    """
     return {
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "viewport": {"width": 1366, "height": 768},
@@ -227,6 +220,15 @@ def _default_desktop_context_options() -> dict:
         "geolocation": {"longitude": 121.4737, "latitude": 31.2304},
         "color_scheme": "light",
     }
+
+
+def _default_desktop_context_options() -> dict:
+    """桌面上下文兜底：当移动端命中完整登录页时使用。
+
+    统一为桌面身份后与 `_default_context_options()` 等价，保留独立函数名
+    以维持既有调用点和测试的可读性。
+    """
+    return _default_context_options()
 
 
 def _clean_kwargs(options: dict) -> dict:

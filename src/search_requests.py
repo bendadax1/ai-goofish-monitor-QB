@@ -22,12 +22,18 @@ _FILTER_FIELDS = (
 
 
 def build_extra_headers(raw_headers):
-    """保留既有浏览器自管头过滤规则；独立导入便于无配置回归。"""
+    """保留既有浏览器自管头过滤规则；独立导入便于无配置回归。
+
+    `accept-encoding` 一并排除：Playwright/Chromium 自行协商并解压响应，
+    手动指定该头在部分场景会导致解码失败，把真实的登录/风控跳转掩盖成
+    `chrome-error://chromewebdata/`。实测在有效 Cookie 下两者等价，此处按
+    官方建议做防御性过滤，保留其他业务头不变。
+    """
     if not raw_headers:
         return {}
     excluded = {
         "cookie", "content-length", "host", "sec-fetch-site", "sec-fetch-mode",
-        "sec-fetch-dest", "sec-fetch-user",
+        "sec-fetch-dest", "sec-fetch-user", "accept-encoding",
     }
     return {
         key: value for key, value in raw_headers.items()
