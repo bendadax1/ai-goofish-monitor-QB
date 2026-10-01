@@ -34,15 +34,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            scripts/portable/requirements-python.in
+          cache-dependency-path: scripts/portable/requirements-python.in
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # 运行时依赖（含 fastapi / sqlalchemy / psycopg2-binary / playwright 等）
-          python -m pip install -r requirements.txt
+          # 按便携锁定的顶层版本安装，复现受支持的 openai 2.x + httpx 0.28.1 组合。
+          # 不能直接用未锁定的 requirements.txt：那会解析到 openai 3.x + httpx2，
+          # 而 src/httpx_compat.py 适配的是 httpx 0.28.1 的私有扩展点。
+          python -m pip install -r scripts/portable/requirements-python.in
           # 仅测试期需要；不写入 requirements.txt，避免影响发行输入。
           python -m pip install pytest
 

@@ -15,7 +15,14 @@
       （`tests/portable_*_pg_*.py` 等）。用 `services: postgres:16` + `DATABASE_URL` 复跑这一批，
       并在 `tests/_ci_guard.needs_postgres` 断言上生效。
 - [ ] **锁定 `requirements.txt` 版本**：落实 `PORTABLE_LAUNCHER_PLAN.md` 决策 D07（版本锁定依赖）。
-      便携链路已有 `scripts/portable/requirements-python.lock.txt`，但仓库根 `requirements.txt` 仍未锁。
+      便携链路已有 `scripts/portable/requirements-python.lock.txt`，CI 现按
+      `scripts/portable/requirements-python.in` 安装以复现受支持组合；但仓库根
+      `requirements.txt` 仍未锁，会解析到 `openai 3.x + httpx2`，与
+      `src/httpx_compat.py`（适配 `httpx 0.28.1` 私有扩展点）不兼容。
+      需决定：升级 `httpx_compat` 适配 `httpx2`，还是在根 requirements 锁定 `openai 2.x + httpx 0.28.1`。
+- [ ] **`ai_handler.py` 编码修复已改，需回归**：原先 `sys.stdout.detach()` 在导入期销毁宿主
+      流对象（pytest / Launcher 均受影响），已改为就地 `reconfigure(encoding="utf-8")`。
+      需确认 Windows 控制台中文输出、Launcher 捕获日志、`python web_server.py` 直接运行均正常。
 - [ ] **明确发行验收基线**：`docs/PORTABLE_ACCEPTANCE_STATUS.md` 多处标注「旧 r16 ZIP 未覆盖」，
       源码领先于冻结包。需指定「哪份 ZIP / 哪个 commit 是当前验收对象」，并记录指纹。
 - [ ] **过发布放行门槛**：干净 Windows、原生 DPI/Explorer 托盘、最终包备份恢复、Docker 冻结后复跑。

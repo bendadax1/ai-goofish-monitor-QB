@@ -14,6 +14,8 @@ from unittest.mock import patch
 import sys
 import uuid
 
+from tests._ci_guard import needs_frozen_launcher_dist
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("portable_bundle_builder", ROOT / "scripts/portable/build-portable-bundle.py")
@@ -379,6 +381,7 @@ class PortableBundleTests(unittest.TestCase):
             with self.assertRaises(builder.BundleError):
                 builder._assert_disk_floor(ROOT, 2*1024**3)
 
+    @needs_frozen_launcher_dist
     def test_notice_inputs_are_copied_with_hashes_and_complete_set_is_reported(self):
         files = builder._notice_files()
         paths = {item.destination for item in files}
@@ -484,6 +487,7 @@ class PortableBundleTests(unittest.TestCase):
                         r'cookie\s*=', r'authorization\s*:\s*bearer\s+[A-Za-z0-9._~-]{16,}', r'localhost|127\.0\.0\.1'):
             self.assertNotRegex(html, pattern)
 
+    @needs_frozen_launcher_dist
     def test_any_unresolved_notice_prevents_complete_inventory(self):
         source_inventory = json.loads((ROOT / "scripts/portable/third-party-notices/inventory.json").read_text(encoding="utf-8"))
         candidate = json.loads(json.dumps(source_inventory))
@@ -525,6 +529,7 @@ class PortableBundleTests(unittest.TestCase):
             with self.assertRaises(builder.BundleError):
                 builder._notice_files()
 
+    @needs_frozen_launcher_dist
     def test_bundle_gap_marker_tracks_notice_completeness(self):
         inventory_path = ROOT / "scripts/portable/third-party-notices/inventory.json"
         original_load_json = builder._load_json

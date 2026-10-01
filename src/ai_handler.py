@@ -11,11 +11,25 @@ from datetime import datetime
 import requests
 from src.ai_response import AIResponseContentError, extract_analysis_candidate
 
-# 设置标准输出编码为UTF-8，解决Windows控制台编码问题
+# 设置标准输出编码为UTF-8，解决Windows控制台编码问题。
+# 只做就地 reconfigure，不替换 sys.stdout / sys.stderr 对象：
+# detach() 会销毁宿主（pytest、Launcher 等）持有的原始流，导致其后续读写
+# 抛出 "underlying buffer has been detached"。
+def _ensure_utf8_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            # 非文本流（如已被重定向为 BytesIO）无法安全改写，保持原样。
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            # 流已关闭或不可重配时静默跳过；编码修复不是致命功能。
+            pass
+
+
 if sys.platform.startswith('win'):
-    import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
+    _ensure_utf8_stdio()
 
 # 从config.py导入不需要动态读取的配置
 from src.config import (

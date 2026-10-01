@@ -55,3 +55,22 @@ def needs_windows_dotnet(test_item):
         sys.platform == "win32" and not in_ci(),
         "需要 Windows + 本地 .NET SDK（CI 不构建 Launcher）",
     )(test_item)
+
+
+def needs_frozen_launcher_dist(test_item):
+    """需要本机已构建、且被 .gitignore 排除的 launcher/dist 冻结包。
+
+    该目录不随源码分发，干净检出（含 CI）中不存在，无法凭空构造。
+    """
+    from pathlib import Path
+
+    marker = (
+        Path(__file__).resolve().parents[1]
+        / "launcher"
+        / "dist"
+        / "portable-acceptance-frozen-20260923-p1"
+    )
+    return unittest.skipUnless(
+        marker.is_dir(),
+        "需要本机预构建的 launcher/dist 冻结包（未纳入版本控制）",
+    )(test_item)
