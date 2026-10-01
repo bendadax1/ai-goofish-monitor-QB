@@ -4,8 +4,7 @@ import re
 import tempfile
 from dotenv import load_dotenv, dotenv_values
 from openai import AsyncOpenAI
-import httpx
-from src.httpx_compat import create_sdk_http_client
+from src.httpx_compat import create_sdk_http_client, httpx
 from src.logging_config import get_logger
 from src.portable.context import (
     PORTABLE_DATABASE_URL_ENVIRONMENT_VARIABLE,

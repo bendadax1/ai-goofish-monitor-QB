@@ -12,10 +12,8 @@ from threading import Lock
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
-import httpx
-import httpcore
 from openai import AsyncOpenAI, OpenAI
-from src.httpx_compat import create_sdk_http_client
+from src.httpx_compat import create_sdk_http_client, httpcore, httpx
 
 import src.config
 from src.config import STORAGE_BACKEND

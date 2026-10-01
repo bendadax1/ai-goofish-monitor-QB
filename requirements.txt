@@ -1,3 +1,7 @@
+# 说明：本项目根 requirements 只约束直接依赖的下限语义，不含精确锁定。
+# 便携发行链路的精确版本（含哈希）见 scripts/portable/requirements-python.lock.txt。
+# 注意 openai 与 httpx 的关系：openai 3.x 依赖的是 httpx2（独立包），
+# src/httpx_compat.py 已同时适配 httpx 0.28.1 与 httpx2，两版本均通过回归。
 uvicorn
 fastapi
 pydantic

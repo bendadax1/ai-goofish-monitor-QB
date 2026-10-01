@@ -1,8 +1,13 @@
-"""实例级代理兼容验收；实际 HTTPX/SDK 接线，所有发送经 fake transport。"""
+"""实例级代理兼容验收；实际 HTTPX/SDK 接线，所有发送经 fake transport。
+
+同时支持 httpx 0.28.1 与 httpx2：两者模块名不同，传输构造点也不同，
+统一在此解析，避免测试与具体 HTTPX 版本耦合。
+"""
 
 import asyncio
 import ast
 from contextlib import ExitStack
+import importlib
 import logging
 import os
 import ssl
@@ -12,7 +17,13 @@ from typing import Any, Dict, Optional, Tuple
 import unittest
 from unittest import mock
 
-import httpx
+# 与 src/httpx_compat 采用同一套解析规则：跟随 openai SDK 的实际依赖，
+# 而不是按名字顺序取第一个（双库共存时容易选错）。
+from src.httpx_compat import HTTPX_MODULE_NAME as _httpx_name
+
+httpx = importlib.import_module(_httpx_name)
+_httpx_client_mod = importlib.import_module(f"{_httpx_name}._client")
+
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
 
 from src.httpx_compat import create_sdk_http_client
@@ -50,6 +61,29 @@ class FakeTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
         self.close()
 
 
+def _make_fake_transport(*args, **kwargs):
+    """httpx2 的 _init_transport / _init_proxy_transport 替身。
+
+    httpx2 的 Client.__init__ 不再引用模块级 HTTPTransport 名字，而是调用
+    这两个方法，因此必须做方法级替换。关键差异：
+
+    - 替换后调用形式是 `self._init_transport(...)` / `self._init_proxy_transport(proxy, ...)`；
+      `mock.patch.object` 以普通函数替换类属性，**不会**自动绑定 self，
+      因此 args[0] 恒为实例自身。
+    - `_init_proxy_transport` 的代理对象在 args[1]；`_init_transport` 无代理。
+
+    真实实现会构造并发起网络传输；测试只需一个可观测替身，route 语义
+    与 httpx 0.28.1 路径下的 FakeTransport 保持一致。
+    """
+    proxy = args[1] if len(args) > 1 else None
+    proxy = proxy if proxy is not None else kwargs.get("proxy")
+    if proxy is not None:
+        kwargs["proxy"] = proxy
+    else:
+        kwargs.pop("proxy", None)
+    return FakeTransport(**kwargs)
+
+
 class ProxyFixture(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.stack = ExitStack()
@@ -60,8 +94,29 @@ class ProxyFixture(unittest.IsolatedAsyncioTestCase):
         }))
         FakeTransport.instances = []
         # 替换 HTTPX 的传输构造点，保留代理匹配及重定向主链。
-        self.stack.enter_context(mock.patch("httpx._client.HTTPTransport", FakeTransport))
-        self.stack.enter_context(mock.patch("httpx._client.AsyncHTTPTransport", FakeTransport))
+        # 解析到当前活跃的 HTTPX 库（httpx 或 httpx2），避免绑定具体版本。
+        self.stack.enter_context(mock.patch.object(_httpx_client_mod, "HTTPTransport", FakeTransport))
+        self.stack.enter_context(mock.patch.object(_httpx_client_mod, "AsyncHTTPTransport", FakeTransport))
+        self._install_httpx2_transport_patches()
+
+    def _install_httpx2_transport_patches(self):
+        """httpx2 不再在构造期引用模块级 HTTPTransport 名字。
+
+        httpx2 的 Client.__init__ 改为调用 `_init_transport` /
+        `_init_proxy_transport` 方法，因此模块级 patch 不生效。仅在检测到
+        该实现时补上方法级 patch；httpx 0.28.1 没有这两个方法（或语义不同），
+        不做任何改动，避免破坏既有回归。
+        """
+        if _httpx_name != "httpx2":
+            return
+        for cls_name in ("Client", "AsyncClient"):
+            cls = getattr(_httpx_client_mod, cls_name, None)
+            if cls is None:
+                continue
+            for meth in ("_init_transport", "_init_proxy_transport"):
+                if not hasattr(cls, meth):
+                    continue
+                self.stack.enter_context(mock.patch.object(cls, meth, _make_fake_transport))
 
     def assert_route(self, response, expected):
         self.assertEqual(response.json()["route"], expected)
@@ -130,9 +185,22 @@ class ProxyTests(ProxyFixture):
             self.assert_route(b, "http://b.test:8080")
 
     def test_invalid_cidr_is_not_silently_dropped(self):
+        """非法 no_proxy CIDR 不得被静默当作有效网络。
+
+        两个 HTTPX 版本的处理不同，断言需分版本：
+        - httpx 0.28.1 把 CIDR 当域名/端口解析，非法前缀触发 InvalidURL；
+        - httpx2 已能正确识别 CIDR 语法，非法前缀不抛错，但必须**不被**
+          当成有效旁路网络（`_no_proxy_ipv6_networks` 为空）。
+        共同底线：非法输入绝不进入旁路集合。
+        """
         with proxy_environment({"HTTP_PROXY": "http://proxy.test:8080", "NO_PROXY": "::1/129"}):
-            with self.assertRaises(httpx.InvalidURL):
-                create_sdk_http_client(asynchronous=False)
+            if _httpx_name == "httpx2":
+                client = create_sdk_http_client(asynchronous=False)
+                with client:
+                    self.assertEqual(client._no_proxy_ipv6_networks, ())
+            else:
+                with self.assertRaises(httpx.InvalidURL):
+                    create_sdk_http_client(asynchronous=False)
 
     async def test_tls_options_and_sdk_defaults_are_preserved(self):
         context = ssl.create_default_context()

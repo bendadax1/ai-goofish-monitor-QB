@@ -21,6 +21,8 @@ logs/
 
 # 产生的文件
 /.tmp/
+# OpenCode 工具目录（skills / memory），属于本地开发工具，不纳入项目版本控制
+/.opencode/
 /launcher/**/bin/
 /launcher/**/obj/
 jsonl/

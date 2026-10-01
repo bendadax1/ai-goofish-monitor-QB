@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from unittest import mock
 
-import httpx
+from src.httpx_compat import httpx
 from fastapi import HTTPException
 
 from src.web import ai_health, ai_manager

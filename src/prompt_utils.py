@@ -7,12 +7,11 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import aiofiles
-import httpx
 from openai import APITimeoutError, AsyncOpenAI
 
 from src import config
 from src.ai_response import extract_final_text
-from src.httpx_compat import create_sdk_http_client
+from src.httpx_compat import create_sdk_http_client, httpx
 from src.logging_config import get_logger
 from src.config import STORAGE_BACKEND
 from src.portable.app_paths import get_portable_runtime_paths
