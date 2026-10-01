@@ -28,3 +28,12 @@
 - [ ] **过发布放行门槛**：干净 Windows、原生 DPI/Explorer 托盘、最终包备份恢复、Docker 冻结后复跑。
 - [ ] **CI 覆盖 Launcher（.NET）**：当前 CI 不构建 `launcher/`。待评估在 `windows-latest` 上
       跑 `scripts/portable/build-launcher-prototype.ps1 -NoPublish` 的成本与必要性。
+- [ ] **修复自动登录（`login.py`）**：当前完全失效。未登录打开 `goofish.com` 首页已直接
+      重定向到 `passport.goofish.com/mini_login.htm`，而代码仍在等首页的登录按钮：
+      `div.nick--RyNYtDXM` 与 `#alibaba-login-box` 实测 count 均为 0（闲鱼前端哈希类名已变）。
+      表现为等待 60s 后无反应。需改为直接处理 passport 页并等待扫码完成。
+      证据见 `.tmp/diag/login_probe.py`。
+- [ ] **`extra_http_headers` 手动指定 `Accept-Encoding` 会掩盖真实错误**：快照 headers 里的
+      `Accept-Encoding: gzip, deflate, br` 交由 Playwright 自行管理压缩更稳妥；手动指定会导致
+      响应解压失败，页面变成 `chrome-error://chromewebdata/`，把「需要登录/确认」的真实原因
+      掩盖成无用的 30s 超时。需评估是否从 `_build_extra_headers` 过滤该头。

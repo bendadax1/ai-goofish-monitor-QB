@@ -4,6 +4,7 @@ import os
 import random
 import hashlib
 import re
+import time
 from datetime import datetime
 from urllib.parse import urlencode
 from typing import Optional, Dict, Any, List, Tuple
@@ -772,6 +773,38 @@ async def fetch_user_profile(context, user_id: str) -> dict:
     return profile_data
 
 
+async def _wait_for_passport_redirect(page, task_name: str = "", timeout_ms: int = 6000, poll_ms: int = 250) -> None:
+    """等待 goto 之后可能发生的 passport 重定向稳定下来。
+
+    闲鱼在检测到新浏览器环境时，会在首页加载完成后异步跳转到
+    passport 确认页。`domcontentloaded` 返回时重定向往往尚未发生，
+    此时立刻检测会得到 none 而漏过“快速进入”确认页。这里轮询等待
+    页面进入已知的 passport 状态或 URL 稳定，避免过早判定。
+    """
+
+    deadline = time.monotonic() + timeout_ms / 1000
+    last_url = page.url or ""
+    stable_since = time.monotonic()
+
+    while time.monotonic() < deadline:
+        await page.wait_for_timeout(poll_ms)
+        try:
+            current_url = page.url or ""
+        except Exception:
+            return
+        if "passport.goofish.com" in current_url:
+            # 已进入 passport，交给状态检测区分 quick_entry / full_login
+            if task_name:
+                log_time("检测到页面已跳转至登录确认页，等待其渲染完成...", task_name=task_name)
+            return
+        if current_url != last_url:
+            last_url = current_url
+            stable_since = time.monotonic()
+        elif time.monotonic() - stable_since >= 1.0:
+            # URL 已稳定且不在 passport，判定为正常页面
+            return
+
+
 async def _detect_passport_page_state(page) -> str:
     """识别 passport 页面状态：quick_entry/full_login/none/passport_unknown。"""
     current_url = page.url or ""
@@ -1170,7 +1203,9 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
             # 步骤 0 - 模拟真实用户：先访问首页（重要的访问策略适配措施）
             log_time("步骤 0 - 模拟真实用户访问首页...", task_name=task_name)
             await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=30000)
-            # 手动导入Cookie可能进入passport，区分“快速进入确认页”和“完整登录页”
+            # 手动导入Cookie可能进入passport，区分“快速进入确认页”和“完整登录页”。
+            # 先等异步重定向稳定，否则 domcontentloaded 返回时仍停在首页会漏判。
+            await _wait_for_passport_redirect(page, task_name)
             passport_result = await _try_passport_quick_entry(page, task_name)
             if passport_result == "full_login" and not desktop_context_retry_used:
                 context, page = await _switch_to_desktop_context_once(
@@ -1183,6 +1218,7 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                 )
                 desktop_context_retry_used = True
                 await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=30000)
+                await _wait_for_passport_redirect(page, task_name)
                 passport_result = await _try_passport_quick_entry(page, task_name)
             if passport_result == "full_login":
                 log_time("当前页面为完整登录页，后续将按现有流程继续并等待导航结果。", task_name=task_name)
@@ -1217,6 +1253,8 @@ async def fetch_xianyu(task_config: dict, debug_limit: int = 0, bound_account: s
                         f"搜索页导航等待响应超时（第{attempt}次），尝试处理登录确认页...",
                         task_name=task_name,
                     )
+                    # 超时可能只是重定向尚未完成，先等页面稳定再判定确认页状态
+                    await _wait_for_passport_redirect(page, task_name)
                     passport_result = await _try_passport_quick_entry(page, task_name)
                     if attempt == 1:
                         if passport_result == "handled":
