@@ -28,11 +28,17 @@
 - [ ] **过发布放行门槛**：干净 Windows、原生 DPI/Explorer 托盘、最终包备份恢复、Docker 冻结后复跑。
 - [ ] **CI 覆盖 Launcher（.NET）**：当前 CI 不构建 `launcher/`。待评估在 `windows-latest` 上
       跑 `scripts/portable/build-launcher-prototype.ps1 -NoPublish` 的成本与必要性。
-- [ ] **修复自动登录（`login.py`）**：当前完全失效。未登录打开 `goofish.com` 首页已直接
-      重定向到 `passport.goofish.com/mini_login.htm`，而代码仍在等首页的登录按钮：
-      `div.nick--RyNYtDXM` 与 `#alibaba-login-box` 实测 count 均为 0（闲鱼前端哈希类名已变）。
-      表现为等待 60s 后无反应。需改为直接处理 passport 页并等待扫码完成。
-      证据见 `.tmp/diag/login_probe.py`。
+- [x] ~~**修复自动登录（`login.py`）**：当前完全失效。~~ **此条结论有误，已撤回。**
+      更正：`login.py` 使用桌面上下文（`is_mobile=False`、1366×768），实测首页停在
+      `goofish.com/`，`div.nick--RyNYtDXM` 与 `#alibaba-login-box` 均 count=1，点击后
+      弹出含「手机扫码安全登录」的登录框。原实现有效，用户实测可自动获取账号。
+      此前判定为失效是因为诊断脚本误用了 `scraper._default_context_options()`（移动端 UA），
+      移动版登录页才没有扫码入口且类名为 0。误加的 `login.py` 改动已回滚。
+- [ ] **登录与抓取使用不同的浏览器身份（设计不一致，待评估）**：`login.py` 用桌面上下文
+      采集账号快照，而 `src/scraper.py` 的搜索流程用移动端上下文
+      （`_default_context_options()` 为 `is_mobile=True` + Android UA）。跨身份复用会
+      触发闲鱼「快速进入」确认页。当前已在 scraper 侧加了确认页处理（`_wait_for_passport_redirect`），
+      但两者身份是否应统一需要产品决策：统一为桌面可减少确认页，统一为移动端可能更贴近其风控基线。
 - [ ] **`extra_http_headers` 手动指定 `Accept-Encoding` 会掩盖真实错误**：快照 headers 里的
       `Accept-Encoding: gzip, deflate, br` 交由 Playwright 自行管理压缩更稳妥；手动指定会导致
       响应解压失败，页面变成 `chrome-error://chromewebdata/`，把「需要登录/确认」的真实原因
