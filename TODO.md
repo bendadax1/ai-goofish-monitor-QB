@@ -7,10 +7,11 @@
 
 ## 待办
 
-- [ ] **补齐项目连续性三件套**：`TODO.md`（本文件已建立）、`docs/PLAN.md`、`docs/DESIGN.md`。
-      现状：计划散落在 `docs/PORTABLE_LAUNCHER_PLAN.md`、`docs/PORTABLE_ACCEPTANCE_STATUS.md`、
-      `docs/UPSTREAM_UPGRADE_PLAN.md`。需把阶段计划/里程碑/风险登记/验收标准收敛到 `PLAN.md`，
-      把架构、数据模型、存储抽象、Provider 接口、便携运行时路径、部署拓扑收敛到 `DESIGN.md`。
+- [x] ~~**补齐项目连续性三件套**~~ **已完成**（2026-10-02）：
+      `TODO.md`（本文件）、`docs/PLAN.md`（阶段计划/里程碑/风险登记/验收标准）、
+      `docs/DESIGN.md`（架构/数据模型/存储抽象/运行时/部署拓扑）均已建立。
+      专项契约（便携后端、备份、打包、Launcher 决策、上游吸收）保持独立，
+      由 `DESIGN.md` 与 `PLAN.md` 引用而非复制。
 - [ ] **为 CI 增加 PostgreSQL service job**：当前 CI 跳过全部需要真实 PG 的用例
       （`tests/portable_*_pg_*.py` 等）。用 `services: postgres:16` + `DATABASE_URL` 复跑这一批，
       并在 `tests/_ci_guard.needs_postgres` 断言上生效。
@@ -19,10 +20,13 @@
       `scripts/portable/requirements-python.in` 安装以复现受支持组合；但仓库根
       `requirements.txt` 仍未锁，会解析到 `openai 3.x + httpx2`，与
       `src/httpx_compat.py`（适配 `httpx 0.28.1` 私有扩展点）不兼容。
-      需决定：升级 `httpx_compat` 适配 `httpx2`，还是在根 requirements 锁定 `openai 2.x + httpx 0.28.1`。
+      **用户已决定（2026-10-02）：升级 `httpx_compat` 适配 `httpx2`**，不锁回 `openai 2.x`。
+      需改 `_get_proxy_map` / `_transport_for_url` 私有扩展点，并重跑
+      `tests/test_upstream_httpx_compat.py` 的路由与 SDK 默认值回归。
 - [ ] **`ai_handler.py` 编码修复已改，需回归**：原先 `sys.stdout.detach()` 在导入期销毁宿主
       流对象（pytest / Launcher 均受影响），已改为就地 `reconfigure(encoding="utf-8")`。
-      需确认 Windows 控制台中文输出、Launcher 捕获日志、`python web_server.py` 直接运行均正常。
+      **部分已验（2026-10-02）**：`python web_server.py` 直接运行与 CI 用例均正常，
+      中文日志无乱码。**仍待验**：Launcher 捕获子进程日志场景（需在便携构建中确认）。
 - [ ] **明确发行验收基线**：`docs/PORTABLE_ACCEPTANCE_STATUS.md` 多处标注「旧 r16 ZIP 未覆盖」，
       源码领先于冻结包。需指定「哪份 ZIP / 哪个 commit 是当前验收对象」，并记录指纹。
 - [ ] **过发布放行门槛**：干净 Windows、原生 DPI/Explorer 托盘、最终包备份恢复、Docker 冻结后复跑。
